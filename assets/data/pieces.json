@@ -1,0 +1,51 @@
+[
+  { "name": "Brick 1x1", "bin": "", "legoId": "3005", "present": true, "imageAsset": "assets/pieces/3005.png" },
+  { "name": "Brick 1x2", "bin": "", "legoId": "3004", "present": true, "imageAsset": "assets/pieces/3004.png" },
+  { "name": "Brick 1x3", "bin": "", "legoId": "3622", "present": true, "imageAsset": "assets/pieces/3622.png" },
+  { "name": "Brick 1x4", "bin": "", "legoId": "3010", "present": true, "imageAsset": "assets/pieces/3010.png" },
+  { "name": "Brick 1x6", "bin": "", "legoId": "3009", "present": true, "imageAsset": "assets/pieces/3009.png" },
+  { "name": "Brick 1x8", "bin": "", "legoId": "3008", "present": true, "imageAsset": "assets/pieces/3008.png" },
+  { "name": "Brick 2x2", "bin": "", "legoId": "3003", "present": true, "imageAsset": "assets/pieces/3003.png" },
+  { "name": "Brick 2x3", "bin": "", "legoId": "3002", "present": true, "imageAsset": "assets/pieces/3002.png" },
+  { "name": "Brick 2x4", "bin": "", "legoId": "3001", "present": true, "imageAsset": "assets/pieces/3001.png" },
+  { "name": "Brick 2x6", "bin": "", "legoId": "2456", "present": true, "imageAsset": "assets/pieces/2456.png" },
+  { "name": "Brick 2x8", "bin": "", "legoId": "3007", "present": true, "imageAsset": "assets/pieces/3007.png" },
+
+  { "name": "Plate 1x1", "bin": "", "legoId": "3024", "present": true, "imageAsset": "assets/pieces/3024.png" },
+  { "name": "Plate 1x2", "bin": "", "legoId": "3023", "present": true, "imageAsset": "assets/pieces/3023.png" },
+  { "name": "Plate 1x3", "bin": "", "legoId": "3623", "present": true, "imageAsset": "assets/pieces/3623.png" },
+  { "name": "Plate 1x4", "bin": "", "legoId": "3710", "present": true, "imageAsset": "assets/pieces/3710.png" },
+  { "name": "Plate 1x6", "bin": "", "legoId": "3666", "present": true, "imageAsset": "assets/pieces/3666.png" },
+  { "name": "Plate 1x8", "bin": "", "legoId": "3460", "present": true, "imageAsset": "assets/pieces/3460.png" },
+  { "name": "Plate 2x2", "bin": "", "legoId": "3022", "present": true, "imageAsset": "assets/pieces/3022.png" },
+  { "name": "Plate 2x3", "bin": "", "legoId": "3021", "present": true, "imageAsset": "assets/pieces/3021.png" },
+  { "name": "Plate 2x4", "bin": "", "legoId": "3020", "present": true, "imageAsset": "assets/pieces/3020.png" },
+  { "name": "Plate 2x6", "bin": "", "legoId": "3795", "present": true, "imageAsset": "assets/pieces/3795.png" },
+  { "name": "Plate 2x8", "bin": "", "legoId": "3034", "present": true, "imageAsset": "assets/pieces/3034.png" },
+
+  { "name": "Tile 1x1", "bin": "", "legoId": "3070b", "present": true, "imageAsset": "assets/pieces/3070b.png" },
+  { "name": "Tile 1x2", "bin": "", "legoId": "3069b", "present": true, "imageAsset": "assets/pieces/3069b.png" },
+  { "name": "Tile 1x3", "bin": "", "legoId": "63864", "present": true, "imageAsset": "assets/pieces/63864.png" },
+  { "name": "Tile 1x4", "bin": "", "legoId": "2431", "present": true, "imageAsset": "assets/pieces/2431.png" },
+  { "name": "Tile 2x2", "bin": "", "legoId": "3068b", "present": true, "imageAsset": "assets/pieces/3068b.png" },
+  { "name": "Tile 2x4", "bin": "", "legoId": "87079", "present": true, "imageAsset": "assets/pieces/87079.png" },
+
+  { "name": "Jumper Plate 1x2 (1 Stud)", "bin": "", "legoId": "3794b", "present": true, "imageAsset": "assets/pieces/3794b.png" },
+  { "name": "Jumper Plate 2x2 (1 Stud)", "bin": "", "legoId": "87580", "present": true, "imageAsset": "assets/pieces/87580.png" },
+
+  { "name": "Slope 45 2x1", "bin": "", "legoId": "3040", "present": true, "imageAsset": "assets/pieces/3040.png" },
+  { "name": "Slope 45 2x2", "bin": "", "legoId": "3039", "present": true, "imageAsset": "assets/pieces/3039.png" },
+  { "name": "Slope 45 2x3", "bin": "", "legoId": "3298", "present": true, "imageAsset": "assets/pieces/3298.png" },
+  { "name": "Slope 33 3x1", "bin": "", "legoId": "4286", "present": true, "imageAsset": "assets/pieces/4286.png" },
+  { "name": "Slope 33 3x2", "bin": "", "legoId": "3297", "present": true, "imageAsset": "assets/pieces/3297.png" },
+
+  { "name": "Technic Brick 1x2 (1 Hole)", "bin": "", "legoId": "3700", "present": true, "imageAsset": "assets/pieces/3700.png" },
+  { "name": "Technic Brick 1x4 (3 Holes)", "bin": "", "legoId": "3701", "present": true, "imageAsset": "assets/pieces/3701.png" },
+  { "name": "Technic Brick 1x6 (5 Holes)", "bin": "", "legoId": "3702", "present": true, "imageAsset": "assets/pieces/3702.png" },
+
+  { "name": "Brick, Modified 1x2 with Studs on Side (SNOT)", "bin": "", "legoId": "11211", "present": true, "imageAsset": "assets/pieces/11211.png" },
+  { "name": "Brick, Modified 1x2 with Groove", "bin": "", "legoId": "4216", "present": true, "imageAsset": "assets/pieces/4216.png" },
+
+  { "name": "Plate 6x6", "bin": "", "legoId": "3958", "present": true, "imageAsset": "assets/pieces/3958.png" },
+  { "name": "Plate 8x8", "bin": "", "legoId": "41539", "present": true, "imageAsset": "assets/pieces/41539.png" }
+]
