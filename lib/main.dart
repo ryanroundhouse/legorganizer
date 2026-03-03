@@ -118,9 +118,147 @@ class PieceStorage {
 
 class _PieceGridScreenState extends State<PieceGridScreen> {
   String _searchQuery = '';
+  String? _selectedPartCatId;
+  String? _selectedBox;
   late Future<List<LegoPiece>> _piecesFuture;
 
   static const _exportMenuAction = 'export';
+  static const Map<String, String> _customCategoryNames = {
+    '11': 'brick',
+    '14': 'plate',
+    '19': 'tile',
+    '3': 'slope',
+    '8': 'technic brick',
+    '5': 'stud brick',
+    '9': 'jumper plate',
+  };
+
+  String _categoryLabel(String partCatId) =>
+      _customCategoryNames[partCatId] ?? partCatId;
+
+  List<String> _categoryOptions(List<LegoPiece> pieces) {
+    final categories = pieces
+        .map((piece) => piece.partCatId.trim())
+        .where((category) => category.isNotEmpty)
+        .toSet()
+        .toList();
+    categories.sort((a, b) {
+      final aNumber = int.tryParse(a);
+      final bNumber = int.tryParse(b);
+      if (aNumber != null && bNumber != null) {
+        return aNumber.compareTo(bNumber);
+      }
+      return a.compareTo(b);
+    });
+    return categories;
+  }
+
+  List<String> _boxOptions(List<LegoPiece> pieces) {
+    final boxes = pieces
+        .map((piece) => piece.bin.trim())
+        .where((box) => box.isNotEmpty)
+        .toSet()
+        .toList();
+    boxes.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return boxes;
+  }
+
+  Future<void> _showFilterDialog({
+    required List<String> categoryOptions,
+    required List<String> boxOptions,
+  }) async {
+    final result = await showDialog<_PieceFilterSelection>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Filter pieces'),
+          content: SizedBox(
+            width: 360,
+            child: categoryOptions.isEmpty && boxOptions.isEmpty
+                ? const Text('No filters available.')
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (categoryOptions.isNotEmpty) ...[
+                          const Text('Category'),
+                          const SizedBox(height: 6),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.clear),
+                            title: const Text('Clear category'),
+                            onTap: () => Navigator.of(context).pop(
+                              _PieceFilterSelection(
+                                categoryId: null,
+                                box: _selectedBox,
+                              ),
+                            ),
+                          ),
+                          ...categoryOptions.map(
+                            (partCatId) => RadioListTile<String>(
+                              value: partCatId,
+                              groupValue: _selectedPartCatId,
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(_categoryLabel(partCatId)),
+                              onChanged: (value) => Navigator.of(context).pop(
+                                _PieceFilterSelection(
+                                  categoryId: value,
+                                  box: _selectedBox,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        if (categoryOptions.isNotEmpty && boxOptions.isNotEmpty)
+                          const SizedBox(height: 10),
+                        if (boxOptions.isNotEmpty) ...[
+                          const Text('Box'),
+                          const SizedBox(height: 6),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.clear),
+                            title: const Text('Clear box'),
+                            onTap: () => Navigator.of(context).pop(
+                              _PieceFilterSelection(
+                                categoryId: _selectedPartCatId,
+                                box: null,
+                              ),
+                            ),
+                          ),
+                          ...boxOptions.map(
+                            (box) => RadioListTile<String>(
+                              value: box,
+                              groupValue: _selectedBox,
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(box),
+                              onChanged: (value) => Navigator.of(context).pop(
+                                _PieceFilterSelection(
+                                  categoryId: _selectedPartCatId,
+                                  box: value,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+    setState(() {
+      _selectedPartCatId = result.categoryId;
+      _selectedBox = result.box;
+    });
+  }
 
   Future<List<LegoPiece>> _loadPieces() => PieceStorage.loadPieces();
 
@@ -319,14 +457,28 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
             }
 
             final normalizedQuery = _searchQuery.trim().toLowerCase();
-            final filteredPieces = normalizedQuery.isEmpty
-                ? pieces
-                : pieces
-                    .where(
-                      (piece) =>
-                          piece.name.toLowerCase().contains(normalizedQuery),
-                    )
-                    .toList();
+            final categoryOptions = _categoryOptions(pieces);
+            final boxOptions = _boxOptions(pieces);
+            final activeCategory = categoryOptions.contains(_selectedPartCatId)
+                ? _selectedPartCatId
+                : null;
+            final activeBox =
+                boxOptions.contains(_selectedBox) ? _selectedBox : null;
+            final hasSearch = normalizedQuery.isNotEmpty;
+            final hasCategoryFilter =
+                activeCategory != null && activeCategory.isNotEmpty;
+            final hasBoxFilter = activeBox != null && activeBox.isNotEmpty;
+            final filteredPieces = pieces.where((piece) {
+              final matchesSearch =
+                  !hasSearch ||
+                  piece.name.toLowerCase().contains(normalizedQuery) ||
+                      piece.legoId.toLowerCase().contains(normalizedQuery);
+              final matchesCategory =
+                  !hasCategoryFilter || piece.partCatId.trim() == activeCategory;
+              final matchesBox = !hasBoxFilter || piece.bin.trim() == activeBox;
+              return matchesSearch && matchesCategory && matchesBox;
+            }).toList();
+            final hasAnyFilter = hasCategoryFilter || hasBoxFilter;
 
             return Padding(
               padding: const EdgeInsets.all(12),
@@ -334,11 +486,34 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                 children: [
                   TextField(
                     onChanged: (value) => setState(() => _searchQuery = value),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Search pieces',
-                      hintText: 'Type part name',
-                      prefixIcon: Icon(Icons.search),
-                      border: OutlineInputBorder(),
+                      hintText: 'Type part name or legoId',
+                      prefixIcon: const Icon(Icons.search),
+                      border: const OutlineInputBorder(),
+                      suffixIcon: Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Material(
+                          color: hasAnyFilter
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(context).colorScheme.surface,
+                          shape: const CircleBorder(),
+                          elevation: 2,
+                          child: IconButton(
+                            tooltip: 'Filter category',
+                            onPressed: () => _showFilterDialog(
+                              categoryOptions: categoryOptions,
+                              boxOptions: boxOptions,
+                            ),
+                            icon: Icon(
+                              Icons.filter_list,
+                              color: hasAnyFilter
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -383,6 +558,13 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   }
 }
 
+class _PieceFilterSelection {
+  const _PieceFilterSelection({required this.categoryId, required this.box});
+
+  final String? categoryId;
+  final String? box;
+}
+
 class PieceTile extends StatelessWidget {
   const PieceTile({
     super.key,
@@ -394,6 +576,11 @@ class PieceTile extends StatelessWidget {
   final LegoPiece piece;
   final ValueChanged<String> onSaveBin;
   final VoidCallback onDelete;
+
+  String? _binNumberOrNull(String rawBin) {
+    final match = RegExp(r'\d+').firstMatch(rawBin);
+    return match?.group(0);
+  }
 
   Future<void> _showEditDialog(BuildContext context) async {
     final controller = TextEditingController(text: piece.bin);
@@ -437,6 +624,8 @@ class PieceTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final binNumber = _binNumberOrNull(piece.bin);
+
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: () {
@@ -482,10 +671,40 @@ class PieceTile extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (binNumber != null)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(5),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                binNumber,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  height: 1,
+                                ),
+                                maxLines: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     if (!piece.present)
                       const Positioned(
                         top: 8,
-                        right: 8,
+                        left: 8,
                         child: Chip(label: Text('Missing')),
                       ),
                   ],
@@ -641,6 +860,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       legoId: part.partNum,
       present: true,
       imageAsset: 'assets/pieces/${part.partNum}.png',
+      partCatId: part.partCatId,
     );
     final updatedPieces = [..._pieces, newPiece];
 
@@ -891,6 +1111,7 @@ class LegoPiece {
     required this.legoId,
     required this.present,
     required this.imageAsset,
+    this.partCatId = '',
   });
 
   factory LegoPiece.fromJson(Map<String, dynamic> json) {
@@ -900,6 +1121,7 @@ class LegoPiece {
       legoId: json['legoId']?.toString() ?? 'Unknown',
       present: json['present'] as bool? ?? false,
       imageAsset: json['imageAsset'] as String? ?? '',
+      partCatId: json['part_cat_id']?.toString() ?? '',
     );
   }
 
@@ -910,6 +1132,7 @@ class LegoPiece {
       'legoId': legoId,
       'present': present,
       'imageAsset': imageAsset,
+      'part_cat_id': partCatId,
     };
   }
 
@@ -919,6 +1142,7 @@ class LegoPiece {
     String? legoId,
     bool? present,
     String? imageAsset,
+    String? partCatId,
   }) {
     return LegoPiece(
       name: name ?? this.name,
@@ -926,6 +1150,7 @@ class LegoPiece {
       legoId: legoId ?? this.legoId,
       present: present ?? this.present,
       imageAsset: imageAsset ?? this.imageAsset,
+      partCatId: partCatId ?? this.partCatId,
     );
   }
 
@@ -934,6 +1159,7 @@ class LegoPiece {
   final String legoId;
   final bool present;
   final String imageAsset;
+  final String partCatId;
 }
 
 class PartRecord {
