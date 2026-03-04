@@ -1,4 +1,4 @@
-# lego_bin
+# Legorganizer
 
 A new Flutter project.
 

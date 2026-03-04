@@ -16,7 +16,7 @@ class LegoBinApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Lego Bin',
+      title: 'Legorganizer',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
         useMaterial3: true,
@@ -123,6 +123,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   late Future<List<LegoPiece>> _piecesFuture;
 
   static const _exportMenuAction = 'export';
+  static const _aboutMenuAction = 'about';
   static const Map<String, String> _customCategoryNames = {
     '11': 'brick',
     '14': 'plate',
@@ -304,6 +305,26 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
     }
   }
 
+  Future<void> _showAboutDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('About Legorganizer'),
+          content: const Text(
+            'The piece images in this app come from Rebrickable.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _updatePieceBin(
     List<LegoPiece> currentPieces,
     LegoPiece piece,
@@ -416,7 +437,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
     return SafeArea(
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Lego Pieces'),
+          title: const Text('Legorganizer'),
           actions: [
             PopupMenuButton<String>(
               icon: const Icon(Icons.menu),
@@ -424,12 +445,18 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
               onSelected: (value) {
                 if (value == _exportMenuAction) {
                   _exportPiecesJson();
+                } else if (value == _aboutMenuAction) {
+                  _showAboutDialog();
                 }
               },
               itemBuilder: (context) => const [
                 PopupMenuItem<String>(
                   value: _exportMenuAction,
                   child: Text('Export'),
+                ),
+                PopupMenuItem<String>(
+                  value: _aboutMenuAction,
+                  child: Text('About'),
                 ),
               ],
             ),
@@ -741,9 +768,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
   static const String _partsPath = 'assets/data/parts.csv';
 
   final TextEditingController _controller = TextEditingController();
-  final TextEditingController _binController = TextEditingController(
-    text: 'Unknown Bin',
-  );
+  final TextEditingController _binController = TextEditingController();
   bool _loading = true;
   List<LegoPiece> _pieces = const [];
   List<PartRecord> _parts = const [];
@@ -852,7 +877,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     }
 
     final enteredBin = _binController.text.trim();
-    final bin = enteredBin.isEmpty ? 'Unknown Bin' : enteredBin;
+    final bin = enteredBin;
 
     final newPiece = LegoPiece(
       name: part.name,
@@ -1012,6 +1037,14 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Text(
+                      'Instructions:\n'
+                      '1. Enter a legoId to look up a part.\n'
+                      '2. Enter a bin location (optional).\n'
+                      '3. Review the part card and tap Add.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 12),
                     TextField(
                       controller: _controller,
                       decoration: const InputDecoration(

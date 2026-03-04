@@ -1,6 +1,6 @@
 {
-    "name": "lego_bin",
-    "short_name": "lego_bin",
+    "name": "Legorganizer",
+    "short_name": "Legorganizer",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

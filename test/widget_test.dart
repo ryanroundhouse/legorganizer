@@ -32,7 +32,7 @@ void main() {
 
     await tester.pump();
 
-    expect(find.text('Lego Pieces'), findsOneWidget);
+    expect(find.text('Legorganizer'), findsOneWidget);
     expect(find.byType(GridView), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
     expect(find.text('Test Part'), findsOneWidget);
