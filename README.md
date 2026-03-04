@@ -41,6 +41,34 @@ Run on web:
 flutter run -d chrome
 ```
 
+## Build Android package
+
+1. Ensure Android tooling is installed (`flutter doctor` should show no Android issues).
+2. Use JDK 17 for this project (recommended for the generated Android Gradle setup):
+
+```bash
+flutter config --jdk-dir=/path/to/jdk-17
+```
+
+Build a release APK:
+
+```bash
+flutter build apk --release
+```
+
+Build a release App Bundle (`.aab`) for Play Store upload:
+
+```bash
+flutter build appbundle --release
+```
+
+Output locations:
+
+- APK: `build/app/outputs/flutter-apk/app-release.apk`
+- AAB: `build/app/outputs/bundle/release/app-release.aab`
+
+Note: release signing is not configured yet. By default, Flutter signs release builds with debug keys until you add a keystore/signing config in `android/app/build.gradle`.
+
 ## How to use
 
 ### Home tab

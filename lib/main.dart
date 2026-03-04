@@ -285,7 +285,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
             content: Text(
               didExport
                   ? 'Exported $fileName.'
-                  : 'Export is only available in web builds.',
+                  : 'Export canceled.',
             ),
             behavior: SnackBarBehavior.floating,
           ),
