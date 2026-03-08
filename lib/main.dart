@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
@@ -77,16 +78,43 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _selectedIndex = 0;
+  final GlobalKey<_PieceGridScreenState> _pieceGridKey =
+      GlobalKey<_PieceGridScreenState>();
+  final GlobalKey<_AddPieceScreenState> _addPieceKey =
+      GlobalKey<_AddPieceScreenState>();
+
+  void _openAddPageWithLegoId(String legoId) {
+    setState(() => _selectedIndex = 1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addPieceKey.currentState?.prefillLegoId(legoId);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      const PieceGridScreen(),
-      const AddPieceScreen(),
+      PieceGridScreen(
+        key: _pieceGridKey,
+        onPredictedLegoIdMissing: _openAddPageWithLegoId,
+      ),
+      AddPieceScreen(key: _addPieceKey),
     ];
 
     return Scaffold(
-      body: pages[_selectedIndex],
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: pages,
+      ),
+      floatingActionButton: _selectedIndex == 0
+          ? FloatingActionButton(
+              onPressed: () {
+                _pieceGridKey.currentState?.captureAndSearchFromCamera();
+              },
+              tooltip: 'Search with camera',
+              child: const Icon(Icons.camera_alt),
+            )
+          : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) {
@@ -103,11 +131,17 @@ class _AppShellState extends State<AppShell> {
 }
 
 class PieceGridScreen extends StatefulWidget {
-  const PieceGridScreen({super.key, this.piecesLoader, this.piecesSaver});
+  const PieceGridScreen({
+    super.key,
+    this.piecesLoader,
+    this.piecesSaver,
+    this.onPredictedLegoIdMissing,
+  });
 
   static const String dataPath = 'assets/data/pieces.json';
   final Future<List<LegoPiece>> Function()? piecesLoader;
   final Future<void> Function(List<LegoPiece>)? piecesSaver;
+  final ValueChanged<String>? onPredictedLegoIdMissing;
 
   @override
   State<PieceGridScreen> createState() => _PieceGridScreenState();
@@ -150,6 +184,9 @@ class PieceStorage {
     return bundledJsonText;
   }
 
+  static List<LegoPiece> decodePiecesJsonText(String jsonText) =>
+      _decodePieces(jsonText);
+
   static List<LegoPiece> _decodePieces(String jsonText) {
     final jsonList = jsonDecode(jsonText) as List<dynamic>;
     return jsonList
@@ -158,12 +195,90 @@ class PieceStorage {
   }
 }
 
+class BrickognizeClient {
+  static final Uri _predictUri = Uri.parse('https://api.brickognize.com/predict/');
+
+  static Future<String?> predictLegoIdFromImage({
+    required Uint8List imageBytes,
+    required String filename,
+  }) async {
+    var response = await _sendPredictRequest(
+      imageBytes: imageBytes,
+      filename: filename,
+      fieldName: 'query_image',
+    );
+    if (response.statusCode == 415) {
+      response = await _sendPredictRequest(
+        imageBytes: imageBytes,
+        filename: filename,
+        fieldName: 'query_image[]',
+      );
+    }
+
+    if (response.statusCode != 200) {
+      throw StateError('Predict request failed with status ${response.statusCode}.');
+    }
+
+    final body = await response.stream.bytesToString();
+    final parsed = jsonDecode(body);
+    if (parsed is! Map<String, dynamic>) {
+      throw const FormatException('Unexpected response format from predict API.');
+    }
+
+    final items = parsed['items'];
+    if (items is! List || items.isEmpty) {
+      return null;
+    }
+    final first = items.first;
+    if (first is! Map<String, dynamic>) {
+      return null;
+    }
+    final id = (first['id']?.toString() ?? '').trim();
+    return id.isEmpty ? null : id;
+  }
+
+  static Future<http.StreamedResponse> _sendPredictRequest({
+    required Uint8List imageBytes,
+    required String filename,
+    required String fieldName,
+  }) {
+    final request = http.MultipartRequest('POST', _predictUri)
+      ..headers['accept'] = 'application/json'
+      ..files.add(
+        http.MultipartFile.fromBytes(
+          fieldName,
+          imageBytes,
+          filename: filename,
+          contentType: _imageMediaType(filename),
+        ),
+      );
+    return request.send();
+  }
+
+  static MediaType _imageMediaType(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) {
+      return MediaType('image', 'png');
+    }
+    if (lower.endsWith('.webp')) {
+      return MediaType('image', 'webp');
+    }
+    return MediaType('image', 'jpeg');
+  }
+}
+
 class _PieceGridScreenState extends State<PieceGridScreen> {
   String _searchQuery = '';
   String? _selectedPartCatId;
   String? _selectedBox;
   late Future<List<LegoPiece>> _piecesFuture;
+  final ImagePicker _imagePicker = ImagePicker();
+  final ScrollController _gridScrollController = ScrollController();
+  bool _cameraLookupLoading = false;
+  List<LegoPiece> _latestPieces = const [];
+  double _lastGridWidth = 0;
 
+  static const _importMenuAction = 'import';
   static const _exportMenuAction = 'export';
   static const _aboutMenuAction = 'about';
   static const Map<String, String> _customCategoryNames = {
@@ -347,6 +462,102 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
     }
   }
 
+  Future<void> _importPiecesJson() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Import is currently supported on Android only.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      return;
+    }
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        withData: true,
+      );
+      if (!mounted || result == null) {
+        return;
+      }
+
+      final selectedFile = result.files.single;
+      final rawBytes = selectedFile.bytes;
+      if (rawBytes == null) {
+        throw FormatException('Could not read selected file bytes.');
+      }
+
+      final jsonText = utf8.decode(rawBytes);
+      final importedPieces = PieceStorage.decodePiecesJsonText(jsonText);
+      final fileName = selectedFile.name;
+
+      final shouldReplace = await showDialog<bool>(
+            context: context,
+            builder: (context) {
+              return AlertDialog(
+                title: const Text('Import pieces'),
+                content: Text(
+                  'Replace your current pieces with ${importedPieces.length} '
+                  'pieces from "$fileName"?',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('Replace'),
+                  ),
+                ],
+              );
+            },
+          ) ??
+          false;
+
+      if (!mounted || !shouldReplace) {
+        return;
+      }
+
+      await PieceStorage.savePieces(importedPieces);
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _piecesFuture = Future.value(importedPieces);
+      });
+
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Imported ${importedPieces.length} pieces.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Could not import pieces JSON: $error'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    }
+  }
+
   Future<void> _showAboutDialog() async {
     await showDialog<void>(
       context: context,
@@ -354,7 +565,8 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
         return AlertDialog(
           title: const Text('About Legorganizer'),
           content: const Text(
-            'The piece images in this app come from Rebrickable.',
+            'The piece images in this app come from Rebrickable.\n\n'
+            'Camera ID functionality uses the API hosted by brickorganize.com.',
           ),
           actions: [
             TextButton(
@@ -475,6 +687,167 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   }
 
   @override
+  void dispose() {
+    _gridScrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> captureAndSearchFromCamera() async {
+    if (_cameraLookupLoading) {
+      return;
+    }
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Camera search is currently supported on Android only.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      return;
+    }
+
+    final image = await _imagePicker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 90,
+    );
+    if (image == null) {
+      return;
+    }
+
+    setState(() {
+      _cameraLookupLoading = true;
+    });
+
+    try {
+      final imageBytes = await image.readAsBytes();
+      final uploadName = image.name.isEmpty ? 'lego_piece.jpg' : image.name;
+      final predictedId = await BrickognizeClient.predictLegoIdFromImage(
+        imageBytes: imageBytes,
+        filename: uploadName,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      if (predictedId == null) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('No LEGO match found from the captured photo.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        return;
+      }
+
+      final matchedPiece = _findPieceByLegoId(predictedId);
+      if (matchedPiece != null) {
+        await _scrollToPiece(matchedPiece.legoId);
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                'Found in inventory: ${matchedPiece.name} (${matchedPiece.legoId}).',
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      } else {
+        widget.onPredictedLegoIdMissing?.call(predictedId);
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Camera search failed: $error'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _cameraLookupLoading = false;
+        });
+      }
+    }
+  }
+
+  LegoPiece? _findPieceByLegoId(String legoId) {
+    final normalizedLegoId = _normalizeLegoId(legoId);
+    for (final piece in _latestPieces) {
+      if (_normalizeLegoId(piece.legoId) == normalizedLegoId) {
+        return piece;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _scrollToPiece(String legoId) async {
+    final targetIndex = _latestPieces.indexWhere(
+      (piece) => _normalizeLegoId(piece.legoId) == _normalizeLegoId(legoId),
+    );
+    if (targetIndex == -1) {
+      return;
+    }
+
+    setState(() {
+      _searchQuery = '';
+      _selectedPartCatId = null;
+      _selectedBox = null;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !_gridScrollController.hasClients) {
+        return;
+      }
+      final targetOffset = _gridOffsetForIndex(targetIndex);
+      final maxOffset = _gridScrollController.position.maxScrollExtent;
+      await _gridScrollController.animateTo(
+        targetOffset.clamp(0.0, maxOffset),
+        duration: const Duration(milliseconds: 450),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  double _gridOffsetForIndex(int index) {
+    const crossAxisCount = 2;
+    const crossAxisSpacing = 12.0;
+    const mainAxisSpacing = 12.0;
+    const childAspectRatio = 0.85;
+    final width = _lastGridWidth > 0 ? _lastGridWidth : 320.0;
+    final tileWidth = (width - crossAxisSpacing) / crossAxisCount;
+    final tileHeight = tileWidth / childAspectRatio;
+    final row = index ~/ crossAxisCount;
+    return row * (tileHeight + mainAxisSpacing);
+  }
+
+  String _normalizeLegoId(String value) {
+    final lower = value.trim().toLowerCase();
+    final chars = lower.runes.where((r) {
+      final isDigit = r >= 48 && r <= 57;
+      final isLower = r >= 97 && r <= 122;
+      return isDigit || isLower;
+    });
+    return String.fromCharCodes(chars);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Scaffold(
@@ -485,13 +858,19 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
               icon: const Icon(Icons.menu),
               tooltip: 'Menu',
               onSelected: (value) {
-                if (value == _exportMenuAction) {
+                if (value == _importMenuAction) {
+                  _importPiecesJson();
+                } else if (value == _exportMenuAction) {
                   _exportPiecesJson();
                 } else if (value == _aboutMenuAction) {
                   _showAboutDialog();
                 }
               },
               itemBuilder: (context) => const [
+                PopupMenuItem<String>(
+                  value: _importMenuAction,
+                  child: Text('Import'),
+                ),
                 PopupMenuItem<String>(
                   value: _exportMenuAction,
                   child: Text('Export'),
@@ -521,6 +900,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
             }
 
             final pieces = snapshot.data ?? const <LegoPiece>[];
+            _latestPieces = pieces;
             if (pieces.isEmpty) {
               return const Center(child: Text('No lego pieces found in JSON.'));
             }
@@ -591,28 +971,34 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                         ? const Center(
                             child: Text('No pieces match your search.'),
                           )
-                        : GridView.builder(
-                            itemCount: filteredPieces.length,
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2,
-                              crossAxisSpacing: 12,
-                              mainAxisSpacing: 12,
-                              childAspectRatio: 0.85,
-                            ),
-                            itemBuilder: (context, index) {
-                              final piece = filteredPieces[index];
-                              return PieceTile(
-                                piece: piece,
-                                onSaveBin: (updatedBin) => _updatePieceBin(
-                                  pieces,
-                                  piece,
-                                  updatedBin,
+                        : LayoutBuilder(
+                            builder: (context, constraints) {
+                              _lastGridWidth = constraints.maxWidth;
+                              return GridView.builder(
+                                controller: _gridScrollController,
+                                itemCount: filteredPieces.length,
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 2,
+                                  crossAxisSpacing: 12,
+                                  mainAxisSpacing: 12,
+                                  childAspectRatio: 0.85,
                                 ),
-                                onDelete: () => _deletePiece(
-                                  pieces,
-                                  piece,
-                                ),
+                                itemBuilder: (context, index) {
+                                  final piece = filteredPieces[index];
+                                  return PieceTile(
+                                    piece: piece,
+                                    onSaveBin: (updatedBin) => _updatePieceBin(
+                                      pieces,
+                                      piece,
+                                      updatedBin,
+                                    ),
+                                    onDelete: () => _deletePiece(
+                                      pieces,
+                                      piece,
+                                    ),
+                                  );
+                                },
                               );
                             },
                           ),
@@ -808,9 +1194,6 @@ class AddPieceScreen extends StatefulWidget {
 
 class _AddPieceScreenState extends State<AddPieceScreen> {
   static const String _partsPath = 'assets/data/parts.csv';
-  static final Uri _brickognizePredictUri = Uri.parse(
-    'https://api.brickognize.com/predict/',
-  );
 
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _binController = TextEditingController();
@@ -828,6 +1211,18 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  void prefillLegoId(String legoId) {
+    final value = legoId.trim();
+    if (value.isEmpty) {
+      return;
+    }
+    _controller.text = value;
+    _controller.selection = TextSelection.collapsed(
+      offset: _controller.text.length,
+    );
+    _lookup();
   }
 
   @override
@@ -994,43 +1389,11 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     try {
       final imageBytes = await image.readAsBytes();
       final uploadName = image.name.isEmpty ? 'lego_piece.jpg' : image.name;
-      var response = await _sendBrickognizePredictRequest(
+      final predictedId = await BrickognizeClient.predictLegoIdFromImage(
         imageBytes: imageBytes,
         filename: uploadName,
-        fieldName: 'query_image',
       );
-      if (response.statusCode == 415) {
-        response = await _sendBrickognizePredictRequest(
-          imageBytes: imageBytes,
-          filename: uploadName,
-          fieldName: 'query_image[]',
-        );
-      }
-      final responseBody = await response.stream.bytesToString();
-      if (response.statusCode != 200) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _statusText =
-              'Camera lookup failed (${response.statusCode}). Please try again.';
-        });
-        return;
-      }
-
-      final parsed = jsonDecode(responseBody);
-      if (parsed is! Map<String, dynamic>) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _statusText = 'Camera lookup returned an unexpected response.';
-        });
-        return;
-      }
-
-      final items = parsed['items'];
-      if (items is! List || items.isEmpty) {
+      if (predictedId == null) {
         if (!mounted) {
           return;
         }
@@ -1040,33 +1403,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         return;
       }
 
-      final topItem = items.first;
-      if (topItem is! Map<String, dynamic>) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _statusText = 'Camera lookup returned an invalid match result.';
-        });
-        return;
-      }
-
-      final predictedId = (topItem['id']?.toString() ?? '').trim();
-      if (predictedId.isEmpty) {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _statusText = 'No LEGO ID returned from camera lookup.';
-        });
-        return;
-      }
-
-      _controller.text = predictedId;
-      _controller.selection = TextSelection.collapsed(
-        offset: _controller.text.length,
-      );
-      _lookup();
+      prefillLegoId(predictedId);
     } catch (error) {
       if (!mounted) {
         return;
@@ -1081,35 +1418,6 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         });
       }
     }
-  }
-
-  Future<http.StreamedResponse> _sendBrickognizePredictRequest({
-    required Uint8List imageBytes,
-    required String filename,
-    required String fieldName,
-  }) {
-    final request = http.MultipartRequest('POST', _brickognizePredictUri)
-      ..headers['accept'] = 'application/json'
-      ..files.add(
-        http.MultipartFile.fromBytes(
-          fieldName,
-          imageBytes,
-          filename: filename,
-          contentType: _imageMediaType(filename),
-        ),
-      );
-    return request.send();
-  }
-
-  MediaType _imageMediaType(String filename) {
-    final lower = filename.toLowerCase();
-    if (lower.endsWith('.png')) {
-      return MediaType('image', 'png');
-    }
-    if (lower.endsWith('.webp')) {
-      return MediaType('image', 'webp');
-    }
-    return MediaType('image', 'jpeg');
   }
 
   List<PartRecord> _parsePartsCsv(String csvText) {
