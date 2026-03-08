@@ -1,7 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'export_downloader.dart';
@@ -804,10 +808,15 @@ class AddPieceScreen extends StatefulWidget {
 
 class _AddPieceScreenState extends State<AddPieceScreen> {
   static const String _partsPath = 'assets/data/parts.csv';
+  static final Uri _brickognizePredictUri = Uri.parse(
+    'https://api.brickognize.com/predict/',
+  );
 
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _binController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
   bool _loading = true;
+  bool _cameraLookupLoading = false;
   List<LegoPiece> _pieces = const [];
   List<PartRecord> _parts = const [];
   Map<String, PartRecord> _partsByLookupKey = const {};
@@ -957,6 +966,152 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     }
   }
 
+  Future<void> _captureAndPredictPart() async {
+    if (_loading || _cameraLookupLoading) {
+      return;
+    }
+
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      setState(() {
+        _statusText = 'Camera lookup is currently supported on Android only.';
+      });
+      return;
+    }
+
+    final image = await _imagePicker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 90,
+    );
+    if (image == null) {
+      return;
+    }
+
+    setState(() {
+      _cameraLookupLoading = true;
+      _statusText = 'Analyzing photo...';
+    });
+
+    try {
+      final imageBytes = await image.readAsBytes();
+      final uploadName = image.name.isEmpty ? 'lego_piece.jpg' : image.name;
+      var response = await _sendBrickognizePredictRequest(
+        imageBytes: imageBytes,
+        filename: uploadName,
+        fieldName: 'query_image',
+      );
+      if (response.statusCode == 415) {
+        response = await _sendBrickognizePredictRequest(
+          imageBytes: imageBytes,
+          filename: uploadName,
+          fieldName: 'query_image[]',
+        );
+      }
+      final responseBody = await response.stream.bytesToString();
+      if (response.statusCode != 200) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _statusText =
+              'Camera lookup failed (${response.statusCode}). Please try again.';
+        });
+        return;
+      }
+
+      final parsed = jsonDecode(responseBody);
+      if (parsed is! Map<String, dynamic>) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _statusText = 'Camera lookup returned an unexpected response.';
+        });
+        return;
+      }
+
+      final items = parsed['items'];
+      if (items is! List || items.isEmpty) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _statusText = 'No LEGO match found from the captured photo.';
+        });
+        return;
+      }
+
+      final topItem = items.first;
+      if (topItem is! Map<String, dynamic>) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _statusText = 'Camera lookup returned an invalid match result.';
+        });
+        return;
+      }
+
+      final predictedId = (topItem['id']?.toString() ?? '').trim();
+      if (predictedId.isEmpty) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _statusText = 'No LEGO ID returned from camera lookup.';
+        });
+        return;
+      }
+
+      _controller.text = predictedId;
+      _controller.selection = TextSelection.collapsed(
+        offset: _controller.text.length,
+      );
+      _lookup();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusText = 'Camera lookup failed: $error';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _cameraLookupLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<http.StreamedResponse> _sendBrickognizePredictRequest({
+    required Uint8List imageBytes,
+    required String filename,
+    required String fieldName,
+  }) {
+    final request = http.MultipartRequest('POST', _brickognizePredictUri)
+      ..headers['accept'] = 'application/json'
+      ..files.add(
+        http.MultipartFile.fromBytes(
+          fieldName,
+          imageBytes,
+          filename: filename,
+          contentType: _imageMediaType(filename),
+        ),
+      );
+    return request.send();
+  }
+
+  MediaType _imageMediaType(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) {
+      return MediaType('image', 'png');
+    }
+    if (lower.endsWith('.webp')) {
+      return MediaType('image', 'webp');
+    }
+    return MediaType('image', 'jpeg');
+  }
+
   List<PartRecord> _parsePartsCsv(String csvText) {
     final lines = const LineSplitter()
         .convert(csvText)
@@ -1092,6 +1247,23 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                       ),
                       onChanged: (_) => _lookup(),
                       onSubmitted: (_) => _lookup(),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed:
+                          _cameraLookupLoading ? null : _captureAndPredictPart,
+                      icon: _cameraLookupLoading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.camera_alt),
+                      label: Text(
+                        _cameraLookupLoading
+                            ? 'Searching from camera...'
+                            : 'Find legoId with camera',
+                      ),
                     ),
                     const SizedBox(height: 12),
                     TextField(
