@@ -566,7 +566,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
           title: const Text('About Legorganizer'),
           content: const Text(
             'The piece images in this app come from Rebrickable.\n\n'
-            'Camera ID functionality uses the API hosted by brickorganize.com.',
+            'Camera ID functionality uses the API hosted by brickognize.com.',
           ),
           actions: [
             TextButton(
