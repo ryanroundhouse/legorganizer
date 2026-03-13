@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:lego_bin/main.dart';
+import 'package:lego_bin/ui/design_tokens.dart';
 
 void main() {
-  testWidgets('shows lego pieces from provided loader', (
+  testWidgets('shows LEGO pieces from provided loader', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -51,7 +52,39 @@ void main() {
     expect(find.text('Test Part'), findsNothing);
   });
 
-  testWidgets('supports category filtering with clear control', (
+  testWidgets('uses adaptive grid delegate', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [
+            LegoPiece(
+              name: 'Adaptive Brick',
+              bin: 'Bin 1',
+              legoId: '11111',
+              present: true,
+              imageAsset: 'assets/pieces/11111.png',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    final grid = tester.widget<GridView>(find.byType(GridView));
+    expect(
+      grid.gridDelegate,
+      isA<SliverGridDelegateWithMaxCrossAxisExtent>(),
+    );
+    final delegate =
+        grid.gridDelegate as SliverGridDelegateWithMaxCrossAxisExtent;
+    expect(delegate.maxCrossAxisExtent, AppGrid.maxCrossAxisExtent);
+  });
+
+  testWidgets('supports category filtering with chips and clear control', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -84,13 +117,14 @@ void main() {
     expect(find.text('Test Brick'), findsOneWidget);
     expect(find.text('Test Plate'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Filter category'));
+    await tester.tap(find.byTooltip('Filter pieces'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('brick'));
     await tester.pumpAndSettle();
 
     expect(find.text('Test Brick'), findsOneWidget);
     expect(find.text('Test Plate'), findsNothing);
+    expect(find.text('Clear all'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'test');
     await tester.pumpAndSettle();
@@ -98,7 +132,7 @@ void main() {
     expect(find.text('Test Brick'), findsOneWidget);
     expect(find.text('Test Plate'), findsNothing);
 
-    await tester.tap(find.byTooltip('Filter category'));
+    await tester.tap(find.byTooltip('Filter pieces'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Clear category'));
     await tester.pumpAndSettle();
@@ -137,7 +171,7 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Filter category'));
+    await tester.tap(find.byTooltip('Filter pieces'));
     await tester.pumpAndSettle();
     expect(find.text('Box A'), findsOneWidget);
     expect(find.text('Box B'), findsOneWidget);
@@ -148,7 +182,7 @@ void main() {
     expect(find.text('Box A Brick'), findsOneWidget);
     expect(find.text('Box B Plate'), findsNothing);
 
-    await tester.tap(find.byTooltip('Filter category'));
+    await tester.tap(find.byTooltip('Filter pieces'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Clear box'));
     await tester.pumpAndSettle();
@@ -188,7 +222,7 @@ void main() {
     await tester.longPress(find.text('Test Part'));
     await tester.pumpAndSettle();
     expect(find.text('Cancel'), findsOneWidget);
-    expect(find.text('Delete'), findsOneWidget);
+    expect(find.text('Delete piece'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
 
     await tester.enterText(
@@ -205,7 +239,7 @@ void main() {
     expect(savedPieces!.single.bin, 'Shelf A');
   });
 
-  testWidgets('long press allows deleting a piece',
+  testWidgets('menu actions allow deleting a piece',
       (WidgetTester tester) async {
     List<LegoPiece>? savedPieces;
     await tester.binding.setSurfaceSize(const Size(1200, 2000));
@@ -232,14 +266,16 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Test Part'));
+    await tester.tap(find.byTooltip('Piece actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete piece'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
 
     expect(savedPieces, isNotNull);
     expect(savedPieces, isEmpty);
-    expect(find.text('No lego pieces found in JSON.'), findsOneWidget);
+    expect(find.text('No pieces yet'), findsOneWidget);
   });
 
   testWidgets('shows bin number badge when bin contains a number', (
@@ -312,6 +348,51 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('123456'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows clear empty-state action when no search results', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [
+            LegoPiece(
+              name: 'Only Part',
+              bin: 'Bin 42',
+              legoId: '99999',
+              present: true,
+              imageAsset: 'assets/pieces/99999.png',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'no-match');
+    await tester.pumpAndSettle();
+
+    expect(find.text('No matching pieces'), findsOneWidget);
+    expect(find.text('Clear filters'), findsOneWidget);
+  });
+
+  testWidgets('add screen renders safely on compact screens', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 520));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AddPieceScreen(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.byType(AddPieceScreen), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 }

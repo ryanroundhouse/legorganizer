@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +12,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'export_downloader.dart';
+import 'ui/app_theme.dart';
+import 'ui/design_tokens.dart';
+import 'ui/state_widgets.dart';
 
 void main() {
   runApp(const LegoBinApp());
@@ -23,10 +27,9 @@ class LegoBinApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Legorganizer',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
-        useMaterial3: true,
-      ),
+      theme: buildLightTheme(),
+      darkTheme: buildDarkTheme(),
+      themeMode: ThemeMode.system,
       home: const SplashScreen(),
     );
   }
@@ -43,7 +46,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Future<void>.delayed(const Duration(seconds: 2), () {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
       }
@@ -58,16 +61,80 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: Image(
-          image: AssetImage('legorganizer logo.png'),
-          width: 240,
-          fit: BoxFit.contain,
+    final colorScheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              BrandColors.cosmic,
+              BrandColors.violet,
+              BrandColors.midnight,
+            ],
+          ),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Opacity(
+              opacity: 0.25,
+              child: CustomPaint(painter: _SplashHorizonPainter()),
+            ),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 170,
+                    height: 170,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          BrandColors.sunset,
+                          BrandColors.glow,
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'LEGORGANIZER',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: colorScheme.onPrimary,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2.1,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+class _SplashHorizonPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0x55B86CFF)
+      ..strokeWidth = 1.4;
+    const startYRatio = 0.58;
+    final startY = size.height * startYRatio;
+    for (double y = startY; y < size.height; y += 10) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class AppShell extends StatefulWidget {
@@ -652,15 +719,6 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                 url: 'https://brickognize.com/',
                 onOpen: _openAboutLink,
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Moodful helps teams run lightweight mood check-ins and see how people are doing over time.',
-              ),
-              _AboutLink(
-                label: 'Learn more at moodful.ca',
-                url: 'https://moodful.ca/',
-                onOpen: _openAboutLink,
-              ),
             ],
           ),
           actions: [
@@ -940,15 +998,24 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   }
 
   double _gridOffsetForIndex(int index) {
-    const crossAxisCount = 2;
-    const crossAxisSpacing = 12.0;
-    const mainAxisSpacing = 12.0;
-    const childAspectRatio = 0.85;
+    final crossAxisCount = _gridCrossAxisCountForWidth(_lastGridWidth);
+    const crossAxisSpacing = AppGrid.spacing;
+    const mainAxisSpacing = AppGrid.spacing;
+    const childAspectRatio = AppGrid.childAspectRatio;
     final width = _lastGridWidth > 0 ? _lastGridWidth : 320.0;
-    final tileWidth = (width - crossAxisSpacing) / crossAxisCount;
+    final tileWidth =
+        (width - crossAxisSpacing * (crossAxisCount - 1)) / crossAxisCount;
     final tileHeight = tileWidth / childAspectRatio;
     final row = index ~/ crossAxisCount;
     return row * (tileHeight + mainAxisSpacing);
+  }
+
+  int _gridCrossAxisCountForWidth(double width) {
+    final effectiveWidth = width > 0 ? width : 320;
+    final count = ((effectiveWidth + AppGrid.spacing) /
+            (AppGrid.maxCrossAxisExtent + AppGrid.spacing))
+        .floor();
+    return math.max(1, count);
   }
 
   String _normalizeLegoId(String value) {
@@ -1010,23 +1077,33 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
             future: _piecesFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
+                return const AppLoadingState(message: 'Loading pieces...');
               }
 
               if (snapshot.hasError) {
-                return Center(
-                  child: Text(
-                    'Failed to load pieces: ${snapshot.error}',
-                    textAlign: TextAlign.center,
-                  ),
+                return AppErrorState(
+                  message: 'Failed to load pieces: ${snapshot.error}',
+                  onRetry: () {
+                    setState(() {
+                      _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+                    });
+                  },
                 );
               }
 
               final pieces = snapshot.data ?? const <LegoPiece>[];
               _latestPieces = pieces;
               if (pieces.isEmpty) {
-                return const Center(
-                    child: Text('No lego pieces found in JSON.'));
+                return AppEmptyState(
+                  title: 'No pieces yet',
+                  message: 'Add a piece from the Add tab or import a JSON backup.',
+                  actionLabel: 'Retry',
+                  onActionPressed: () {
+                    setState(() {
+                      _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+                    });
+                  },
+                );
               }
 
               final normalizedQuery = _searchQuery.trim().toLowerCase();
@@ -1055,7 +1132,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
               final hasAnyFilter = hasCategoryFilter || hasBoxFilter;
 
               return Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(AppSpacing.sm),
                 child: Column(
                   children: [
                     Material(
@@ -1065,13 +1142,13 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                             setState(() => _searchQuery = value),
                         decoration: InputDecoration(
                           labelText: 'Search pieces',
-                          hintText: 'Type part name or legoId',
+                          hintText: 'Type part name or LEGO ID',
                           prefixIcon: const Icon(Icons.search),
                           filled: true,
                           fillColor: colorScheme.surfaceContainerHighest,
                           border: const OutlineInputBorder(),
                           suffixIcon: Padding(
-                            padding: const EdgeInsets.only(right: 4),
+                            padding: const EdgeInsets.only(right: AppSpacing.xxs),
                             child: Material(
                               color: hasAnyFilter
                                   ? colorScheme.primaryContainer
@@ -1079,7 +1156,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                               shape: const CircleBorder(),
                               elevation: 2,
                               child: IconButton(
-                                tooltip: 'Filter category',
+                                tooltip: 'Filter pieces',
                                 onPressed: () => _showFilterDialog(
                                   categoryOptions: categoryOptions,
                                   boxOptions: boxOptions,
@@ -1095,11 +1172,68 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    if (hasSearch || hasAnyFilter) ...[
+                      const SizedBox(height: AppSpacing.xs),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Wrap(
+                                spacing: AppSpacing.xs,
+                                children: [
+                                  if (hasSearch)
+                                    InputChip(
+                                      label: Text('Search: ${_searchQuery.trim()}'),
+                                      onDeleted: () => setState(
+                                        () => _searchQuery = '',
+                                      ),
+                                    ),
+                                  if (hasCategoryFilter)
+                                    InputChip(
+                                      label: Text(
+                                        'Category: ${_categoryLabel(activeCategory)}',
+                                      ),
+                                      onDeleted: () => setState(
+                                        () => _selectedPartCatId = null,
+                                      ),
+                                    ),
+                                  if (hasBoxFilter)
+                                    InputChip(
+                                      label: Text('Box: $activeBox'),
+                                      onDeleted: () => setState(
+                                        () => _selectedBox = null,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (hasSearch || hasAnyFilter)
+                            TextButton(
+                              onPressed: () => setState(() {
+                                _searchQuery = '';
+                                _selectedPartCatId = null;
+                                _selectedBox = null;
+                              }),
+                              child: const Text('Clear all'),
+                            ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: AppSpacing.sm),
                     Expanded(
                       child: filteredPieces.isEmpty
-                          ? const Center(
-                              child: Text('No pieces match your search.'),
+                          ? AppEmptyState(
+                              title: 'No matching pieces',
+                              message:
+                                  'Try a different search, remove filters, or clear all criteria.',
+                              actionLabel: 'Clear filters',
+                              onActionPressed: () => setState(() {
+                                _searchQuery = '';
+                                _selectedPartCatId = null;
+                                _selectedBox = null;
+                              }),
                             )
                           : LayoutBuilder(
                               builder: (context, constraints) {
@@ -1108,11 +1242,11 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                                   controller: _gridScrollController,
                                   itemCount: filteredPieces.length,
                                   gridDelegate:
-                                      const SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: 2,
-                                    crossAxisSpacing: 12,
-                                    mainAxisSpacing: 12,
-                                    childAspectRatio: 0.85,
+                                      const SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: AppGrid.maxCrossAxisExtent,
+                                    crossAxisSpacing: AppGrid.spacing,
+                                    mainAxisSpacing: AppGrid.spacing,
+                                    childAspectRatio: AppGrid.childAspectRatio,
                                   ),
                                   itemBuilder: (context, index) {
                                     final piece = filteredPieces[index];
@@ -1163,9 +1297,8 @@ class _AboutLink extends StatelessWidget {
     return TextButton(
       onPressed: () => onOpen(url),
       style: TextButton.styleFrom(
-        padding: EdgeInsets.zero,
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        minimumSize: const Size(44, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         alignment: Alignment.centerLeft,
       ),
       child: Text(
@@ -1185,6 +1318,13 @@ class _PieceFilterSelection {
 
   final String? categoryId;
   final String? box;
+}
+
+class _InlineStatusData {
+  const _InlineStatusData({required this.message, required this.tone});
+
+  final String message;
+  final StatusTone tone;
 }
 
 class PieceTile extends StatelessWidget {
@@ -1227,9 +1367,12 @@ class PieceTile extends StatelessWidget {
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                onDelete();
+                _showDeleteDialog(context);
               },
-              child: const Text('Delete'),
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+              ),
+              child: const Text('Delete piece'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(controller.text),
@@ -1244,12 +1387,41 @@ class PieceTile extends StatelessWidget {
     }
   }
 
+  Future<void> _showDeleteDialog(BuildContext context) async {
+    final shouldDelete = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Delete piece?'),
+            content: Text('Delete ${piece.name} from your inventory?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (shouldDelete) {
+      onDelete();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final binNumber = _binNumberOrNull(piece.bin);
+    final colorScheme = Theme.of(context).colorScheme;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: AppRadius.card,
       onTap: () {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
@@ -1265,9 +1437,9 @@ class PieceTile extends StatelessWidget {
       onSecondaryTap: () => _showEditDialog(context),
       child: Ink(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.black12),
-          color: Colors.white,
+          borderRadius: AppRadius.card,
+          border: Border.all(color: colorScheme.outlineVariant),
+          color: colorScheme.surface,
         ),
         child: Padding(
           padding: const EdgeInsets.all(10),
@@ -1279,15 +1451,20 @@ class PieceTile extends StatelessWidget {
                   children: [
                     Positioned.fill(
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: AppRadius.image,
                         child: Image.asset(
                           piece.imageAsset,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const DecoratedBox(
-                            decoration: BoxDecoration(color: Color(0xFFE6E6E6)),
+                          errorBuilder: (_, __, ___) => DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
+                            ),
                             child: Icon(
                               Icons.image_not_supported_outlined,
                               size: 42,
+                              color: colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ),
@@ -1301,8 +1478,8 @@ class PieceTile extends StatelessWidget {
                           width: 40,
                           height: 40,
                           alignment: Alignment.center,
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
+                          decoration: BoxDecoration(
+                            color: colorScheme.error,
                             shape: BoxShape.circle,
                           ),
                           child: Padding(
@@ -1311,8 +1488,8 @@ class PieceTile extends StatelessWidget {
                               fit: BoxFit.scaleDown,
                               child: Text(
                                 binNumber,
-                                style: const TextStyle(
-                                  color: Colors.white,
+                                style: TextStyle(
+                                  color: colorScheme.onError,
                                   fontSize: 20,
                                   fontWeight: FontWeight.bold,
                                   height: 1,
@@ -1333,16 +1510,49 @@ class PieceTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                piece.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'ID: ${piece.legoId}',
-                style: Theme.of(context).textTheme.bodySmall,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          piece.name,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'ID: ${piece.legoId}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: 'Piece actions',
+                    icon: const Icon(Icons.more_vert),
+                    onSelected: (value) {
+                      if (value == 'edit') {
+                        _showEditDialog(context);
+                      } else if (value == 'delete') {
+                        _showDeleteDialog(context);
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem<String>(
+                        value: 'edit',
+                        child: Text('Edit bin'),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Text('Delete piece'),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ],
           ),
@@ -1372,7 +1582,11 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
   Map<String, PartRecord> _partsByLookupKey = const {};
   Map<String, String> _pieceNamesById = const {};
   PartRecord? _foundPart;
-  String? _statusText;
+  _InlineStatusData? _status;
+
+  void _setStatus(String message, StatusTone tone) {
+    _status = _InlineStatusData(message: message, tone: tone);
+  }
 
   @override
   void initState() {
@@ -1421,7 +1635,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       }
       setState(() {
         _loading = false;
-        _statusText = 'Failed to load part data: $error';
+        _setStatus('Failed to load part data: $error', StatusTone.error);
       });
     }
   }
@@ -1435,7 +1649,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     if (_parts.isEmpty && _pieceNamesById.isEmpty) {
       setState(() {
         _foundPart = null;
-        _statusText = 'Part data is not loaded yet.';
+        _setStatus('Part data is not loaded yet.', StatusTone.error);
       });
       return;
     }
@@ -1443,7 +1657,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     if (legoId.isEmpty) {
       setState(() {
         _foundPart = null;
-        _statusText = null;
+        _status = null;
       });
       return;
     }
@@ -1457,8 +1671,10 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
           partCatId: '',
           partMaterial: '',
         );
-        _statusText =
-            'Part $legoId is already in pieces.json and cannot be added.';
+        _setStatus(
+          'Part $legoId is already in your inventory and cannot be added.',
+          StatusTone.warning,
+        );
       });
       return;
     }
@@ -1466,8 +1682,11 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     final found = _findPartByLegoId(legoId);
     setState(() {
       _foundPart = found;
-      _statusText =
-          found == null ? 'No part found for legoId "$legoId".' : null;
+      if (found == null) {
+        _setStatus('No part found for LEGO ID "$legoId".', StatusTone.warning);
+      } else {
+        _status = null;
+      }
     });
   }
 
@@ -1479,8 +1698,10 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
 
     if (_pieceNamesById.containsKey(part.partNum)) {
       setState(() {
-        _statusText =
-            'Part ${part.partNum} already exists in pieces.json and cannot be added.';
+        _setStatus(
+          'Part ${part.partNum} already exists in your inventory.',
+          StatusTone.warning,
+        );
       });
       return;
     }
@@ -1507,7 +1728,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       setState(() {
         _pieces = updatedPieces;
         _pieceNamesById = _buildPieceNameMap(updatedPieces);
-        _statusText = 'Added ${part.partNum} to saved pieces.';
+        _setStatus('Added ${part.partNum} to your inventory.', StatusTone.success);
       });
 
       ScaffoldMessenger.of(context)
@@ -1523,7 +1744,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         return;
       }
       setState(() {
-        _statusText = 'Could not save piece changes: $error';
+        _setStatus('Could not save piece changes: $error', StatusTone.error);
       });
     }
   }
@@ -1535,7 +1756,10 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
 
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
       setState(() {
-        _statusText = 'Camera lookup is currently supported on Android only.';
+        _setStatus(
+          'Camera lookup is currently supported on Android only.',
+          StatusTone.info,
+        );
       });
       return;
     }
@@ -1550,7 +1774,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
 
     setState(() {
       _cameraLookupLoading = true;
-      _statusText = 'Analyzing photo...';
+      _setStatus('Analyzing photo...', StatusTone.info);
     });
 
     try {
@@ -1565,7 +1789,10 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
           return;
         }
         setState(() {
-          _statusText = 'No LEGO match found from the captured photo.';
+          _setStatus(
+            'No LEGO match found from the captured photo.',
+            StatusTone.warning,
+          );
         });
         return;
       }
@@ -1576,7 +1803,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         return;
       }
       setState(() {
-        _statusText = 'Camera lookup failed: $error';
+        _setStatus('Camera lookup failed: $error', StatusTone.error);
       });
     } finally {
       if (mounted) {
@@ -1695,128 +1922,148 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     final canAdd =
         foundPart != null && !_pieceNamesById.containsKey(foundPart.partNum);
 
-    return SafeArea(
-      child: Scaffold(
-        appBar: AppBar(title: const Text('Add Lego Piece')),
-        body: Padding(
-          padding: const EdgeInsets.all(16),
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Instructions:\n'
-                      '1. Enter a legoId to look up a part.\n'
-                      '2. Enter a bin location (optional).\n'
-                      '3. Review the part card and tap Add.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _controller,
-                      decoration: const InputDecoration(
-                        labelText: 'legoId',
-                        hintText: 'Type a legoId (example: 3001)',
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (_) => _lookup(),
-                      onSubmitted: (_) => _lookup(),
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton.icon(
-                      onPressed:
-                          _cameraLookupLoading ? null : _captureAndPredictPart,
-                      icon: _cameraLookupLoading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.camera_alt),
-                      label: Text(
-                        _cameraLookupLoading
-                            ? 'Searching from camera...'
-                            : 'Find legoId with camera',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _binController,
-                      decoration: const InputDecoration(
-                        labelText: 'Bin',
-                        hintText: 'Type bin location (example: Bin 12)',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    if (_statusText != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        _statusText!,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    if (foundPart != null)
-                      Expanded(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Card(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(12),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        foundPart.name,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text('legoId: ${foundPart.partNum}'),
-                                      const SizedBox(height: 12),
-                                      SizedBox(
-                                        height: 200,
-                                        child: Center(
-                                          child: Image.asset(
-                                            imageAsset,
-                                            fit: BoxFit.contain,
-                                            errorBuilder: (_, __, ___) =>
-                                                const DecoratedBox(
-                                              decoration: BoxDecoration(
-                                                  color: Color(0xFFE6E6E6)),
-                                              child: SizedBox(
-                                                width: double.infinity,
-                                                child: Center(
-                                                  child: Text(
-                                                      'Image not found for this legoId.'),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add LEGO Piece')),
+      body: SafeArea(
+        child: _loading
+            ? const AppLoadingState(message: 'Loading part catalog...')
+            : Column(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            'Enter a LEGO ID to preview the part, optionally add a bin location, then add it to your inventory.',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          TextField(
+                            controller: _controller,
+                            decoration: const InputDecoration(
+                              labelText: 'LEGO ID',
+                              hintText: 'Example: 3001',
+                            ),
+                            textInputAction: TextInputAction.search,
+                            onChanged: (_) => _lookup(),
+                            onSubmitted: (_) => _lookup(),
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          FilledButton.icon(
+                            onPressed: _cameraLookupLoading
+                                ? null
+                                : _captureAndPredictPart,
+                            icon: _cameraLookupLoading
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.camera_alt),
+                            label: Text(
+                              _cameraLookupLoading
+                                  ? 'Searching camera...'
+                                  : 'Find LEGO ID with camera',
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          TextField(
+                            controller: _binController,
+                            decoration: const InputDecoration(
+                              labelText: 'Bin',
+                              hintText: 'Example: Bin 12',
+                            ),
+                          ),
+                          if (_status != null) ...[
+                            const SizedBox(height: AppSpacing.xs),
+                            InlineStatusBanner(
+                              message: _status!.message,
+                              tone: _status!.tone,
+                            ),
+                          ],
+                          const SizedBox(height: AppSpacing.md),
+                          if (foundPart != null)
+                            Card(
+                              child: Padding(
+                                padding: const EdgeInsets.all(AppSpacing.sm),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      foundPart.name,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium,
+                                    ),
+                                    const SizedBox(height: AppSpacing.xs),
+                                    Text('LEGO ID: ${foundPart.partNum}'),
+                                    const SizedBox(height: AppSpacing.sm),
+                                    SizedBox(
+                                      height: 200,
+                                      child: Center(
+                                        child: Image.asset(
+                                          imageAsset,
+                                          fit: BoxFit.contain,
+                                          errorBuilder: (_, __, ___) =>
+                                              DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .surfaceContainerHighest,
+                                              borderRadius: AppRadius.image,
+                                            ),
+                                            child: const SizedBox(
+                                              width: double.infinity,
+                                              child: Center(
+                                                child: Text(
+                                                  'Image not found for this LEGO ID.',
                                                 ),
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 12),
-                              FilledButton.icon(
-                                onPressed: canAdd ? _addPart : null,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Add'),
-                              ),
-                            ],
+                            )
+                          else
+                            const AppEmptyState(
+                              title: 'No part selected',
+                              message:
+                                  'Search by LEGO ID or use the camera to find a matching part.',
+                              icon: Icons.search,
+                            ),
+                          SizedBox(
+                            height: AppSpacing.lg + MediaQuery.of(context).viewInsets.bottom,
                           ),
-                        ),
+                        ],
                       ),
-                  ],
-                ),
-        ),
+                    ),
+                  ),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.md,
+                        AppSpacing.xs,
+                        AppSpacing.md,
+                        AppSpacing.md,
+                      ),
+                      child: FilledButton.icon(
+                        onPressed: canAdd ? _addPart : null,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add to inventory'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
