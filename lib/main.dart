@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'export_downloader.dart';
 
@@ -196,7 +197,8 @@ class PieceStorage {
 }
 
 class BrickognizeClient {
-  static final Uri _predictUri = Uri.parse('https://api.brickognize.com/predict/');
+  static final Uri _predictUri =
+      Uri.parse('https://api.brickognize.com/predict/');
 
   static Future<String?> predictLegoIdFromImage({
     required Uint8List imageBytes,
@@ -216,13 +218,15 @@ class BrickognizeClient {
     }
 
     if (response.statusCode != 200) {
-      throw StateError('Predict request failed with status ${response.statusCode}.');
+      throw StateError(
+          'Predict request failed with status ${response.statusCode}.');
     }
 
     final body = await response.stream.bytesToString();
     final parsed = jsonDecode(body);
     if (parsed is! Map<String, dynamic>) {
-      throw const FormatException('Unexpected response format from predict API.');
+      throw const FormatException(
+          'Unexpected response format from predict API.');
     }
 
     final items = parsed['items'];
@@ -509,9 +513,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
         ..showSnackBar(
           SnackBar(
             content: Text(
-              didExport
-                  ? 'Exported $fileName.'
-                  : 'Export canceled.',
+              didExport ? 'Exported $fileName.' : 'Export canceled.',
             ),
             behavior: SnackBarBehavior.floating,
           ),
@@ -633,9 +635,33 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
       builder: (context) {
         return AlertDialog(
           title: const Text('About Legorganizer'),
-          content: const Text(
-            'The piece images in this app come from Rebrickable.\n\n'
-            'Camera ID functionality uses the API hosted by brickognize.com.',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('The piece images in this app come from'),
+              _AboutLink(
+                label: 'Rebrickable',
+                url: 'https://rebrickable.com/home/',
+                onOpen: _openAboutLink,
+              ),
+              const SizedBox(height: 16),
+              const Text('Camera ID functionality uses the API hosted by'),
+              _AboutLink(
+                label: 'brickognize.com',
+                url: 'https://brickognize.com/',
+                onOpen: _openAboutLink,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Moodful helps teams run lightweight mood check-ins and see how people are doing over time.',
+              ),
+              _AboutLink(
+                label: 'Learn more at moodful.ca',
+                url: 'https://moodful.ca/',
+                onOpen: _openAboutLink,
+              ),
+            ],
           ),
           actions: [
             TextButton(
@@ -646,6 +672,24 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
         );
       },
     );
+  }
+
+  Future<void> _openAboutLink(String url) async {
+    final uri = Uri.parse(url);
+    final didLaunch =
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (didLaunch || !mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Could not open $url'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   Future<void> _updatePieceBin(
@@ -773,7 +817,8 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
         ..hideCurrentSnackBar()
         ..showSnackBar(
           const SnackBar(
-            content: Text('Camera search is currently supported on Android only.'),
+            content:
+                Text('Camera search is currently supported on Android only.'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -918,9 +963,16 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final surfaceColor = colorScheme.surface;
+
     return SafeArea(
       child: Scaffold(
+        backgroundColor: surfaceColor,
         appBar: AppBar(
+          backgroundColor: surfaceColor,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
           title: const Text('Legorganizer'),
           actions: [
             PopupMenuButton<String>(
@@ -952,130 +1004,176 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
             ),
           ],
         ),
-        body: FutureBuilder<List<LegoPiece>>(
-          future: _piecesFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
-            }
+        body: ColoredBox(
+          color: surfaceColor,
+          child: FutureBuilder<List<LegoPiece>>(
+            future: _piecesFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-            if (snapshot.hasError) {
-              return Center(
-                child: Text(
-                  'Failed to load pieces: ${snapshot.error}',
-                  textAlign: TextAlign.center,
-                ),
-              );
-            }
+              if (snapshot.hasError) {
+                return Center(
+                  child: Text(
+                    'Failed to load pieces: ${snapshot.error}',
+                    textAlign: TextAlign.center,
+                  ),
+                );
+              }
 
-            final pieces = snapshot.data ?? const <LegoPiece>[];
-            _latestPieces = pieces;
-            if (pieces.isEmpty) {
-              return const Center(child: Text('No lego pieces found in JSON.'));
-            }
+              final pieces = snapshot.data ?? const <LegoPiece>[];
+              _latestPieces = pieces;
+              if (pieces.isEmpty) {
+                return const Center(
+                    child: Text('No lego pieces found in JSON.'));
+              }
 
-            final normalizedQuery = _searchQuery.trim().toLowerCase();
-            final categoryOptions = _categoryOptions(pieces);
-            final boxOptions = _boxOptions(pieces);
-            final activeCategory = categoryOptions.contains(_selectedPartCatId)
-                ? _selectedPartCatId
-                : null;
-            final activeBox =
-                boxOptions.contains(_selectedBox) ? _selectedBox : null;
-            final hasSearch = normalizedQuery.isNotEmpty;
-            final hasCategoryFilter =
-                activeCategory != null && activeCategory.isNotEmpty;
-            final hasBoxFilter = activeBox != null && activeBox.isNotEmpty;
-            final filteredPieces = pieces.where((piece) {
-              final matchesSearch =
-                  !hasSearch ||
-                  piece.name.toLowerCase().contains(normalizedQuery) ||
-                      piece.legoId.toLowerCase().contains(normalizedQuery);
-              final matchesCategory =
-                  !hasCategoryFilter || piece.partCatId.trim() == activeCategory;
-              final matchesBox = !hasBoxFilter || piece.bin.trim() == activeBox;
-              return matchesSearch && matchesCategory && matchesBox;
-            }).toList();
-            final hasAnyFilter = hasCategoryFilter || hasBoxFilter;
+              final normalizedQuery = _searchQuery.trim().toLowerCase();
+              final categoryOptions = _categoryOptions(pieces);
+              final boxOptions = _boxOptions(pieces);
+              final activeCategory =
+                  categoryOptions.contains(_selectedPartCatId)
+                      ? _selectedPartCatId
+                      : null;
+              final activeBox =
+                  boxOptions.contains(_selectedBox) ? _selectedBox : null;
+              final hasSearch = normalizedQuery.isNotEmpty;
+              final hasCategoryFilter =
+                  activeCategory != null && activeCategory.isNotEmpty;
+              final hasBoxFilter = activeBox != null && activeBox.isNotEmpty;
+              final filteredPieces = pieces.where((piece) {
+                final matchesSearch = !hasSearch ||
+                    piece.name.toLowerCase().contains(normalizedQuery) ||
+                    piece.legoId.toLowerCase().contains(normalizedQuery);
+                final matchesCategory = !hasCategoryFilter ||
+                    piece.partCatId.trim() == activeCategory;
+                final matchesBox =
+                    !hasBoxFilter || piece.bin.trim() == activeBox;
+                return matchesSearch && matchesCategory && matchesBox;
+              }).toList();
+              final hasAnyFilter = hasCategoryFilter || hasBoxFilter;
 
-            return Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  TextField(
-                    onChanged: (value) => setState(() => _searchQuery = value),
-                    decoration: InputDecoration(
-                      labelText: 'Search pieces',
-                      hintText: 'Type part name or legoId',
-                      prefixIcon: const Icon(Icons.search),
-                      border: const OutlineInputBorder(),
-                      suffixIcon: Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Material(
-                          color: hasAnyFilter
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(context).colorScheme.surface,
-                          shape: const CircleBorder(),
-                          elevation: 2,
-                          child: IconButton(
-                            tooltip: 'Filter category',
-                            onPressed: () => _showFilterDialog(
-                              categoryOptions: categoryOptions,
-                              boxOptions: boxOptions,
-                            ),
-                            icon: Icon(
-                              Icons.filter_list,
+              return Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    Material(
+                      color: surfaceColor,
+                      child: TextField(
+                        onChanged: (value) =>
+                            setState(() => _searchQuery = value),
+                        decoration: InputDecoration(
+                          labelText: 'Search pieces',
+                          hintText: 'Type part name or legoId',
+                          prefixIcon: const Icon(Icons.search),
+                          filled: true,
+                          fillColor: colorScheme.surfaceContainerHighest,
+                          border: const OutlineInputBorder(),
+                          suffixIcon: Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Material(
                               color: hasAnyFilter
-                                  ? Theme.of(context).colorScheme.primary
-                                  : null,
+                                  ? colorScheme.primaryContainer
+                                  : colorScheme.surface,
+                              shape: const CircleBorder(),
+                              elevation: 2,
+                              child: IconButton(
+                                tooltip: 'Filter category',
+                                onPressed: () => _showFilterDialog(
+                                  categoryOptions: categoryOptions,
+                                  boxOptions: boxOptions,
+                                ),
+                                icon: Icon(
+                                  Icons.filter_list,
+                                  color:
+                                      hasAnyFilter ? colorScheme.primary : null,
+                                ),
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: filteredPieces.isEmpty
-                        ? const Center(
-                            child: Text('No pieces match your search.'),
-                          )
-                        : LayoutBuilder(
-                            builder: (context, constraints) {
-                              _lastGridWidth = constraints.maxWidth;
-                              return GridView.builder(
-                                controller: _gridScrollController,
-                                itemCount: filteredPieces.length,
-                                gridDelegate:
-                                    const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 2,
-                                  crossAxisSpacing: 12,
-                                  mainAxisSpacing: 12,
-                                  childAspectRatio: 0.85,
-                                ),
-                                itemBuilder: (context, index) {
-                                  final piece = filteredPieces[index];
-                                  return PieceTile(
-                                    piece: piece,
-                                    onSaveBin: (updatedBin) => _updatePieceBin(
-                                      pieces,
-                                      piece,
-                                      updatedBin,
-                                    ),
-                                    onDelete: () => _deletePiece(
-                                      pieces,
-                                      piece,
-                                    ),
-                                  );
-                                },
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            );
-          },
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: filteredPieces.isEmpty
+                          ? const Center(
+                              child: Text('No pieces match your search.'),
+                            )
+                          : LayoutBuilder(
+                              builder: (context, constraints) {
+                                _lastGridWidth = constraints.maxWidth;
+                                return GridView.builder(
+                                  controller: _gridScrollController,
+                                  itemCount: filteredPieces.length,
+                                  gridDelegate:
+                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    crossAxisSpacing: 12,
+                                    mainAxisSpacing: 12,
+                                    childAspectRatio: 0.85,
+                                  ),
+                                  itemBuilder: (context, index) {
+                                    final piece = filteredPieces[index];
+                                    return PieceTile(
+                                      piece: piece,
+                                      onSaveBin: (updatedBin) =>
+                                          _updatePieceBin(
+                                        pieces,
+                                        piece,
+                                        updatedBin,
+                                      ),
+                                      onDelete: () => _deletePiece(
+                                        pieces,
+                                        piece,
+                                      ),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutLink extends StatelessWidget {
+  const _AboutLink({
+    required this.label,
+    required this.url,
+    required this.onOpen,
+  });
+
+  final String label;
+  final String url;
+  final Future<void> Function(String url) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return TextButton(
+      onPressed: () => onOpen(url),
+      style: TextButton.styleFrom(
+        padding: EdgeInsets.zero,
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        alignment: Alignment.centerLeft,
+      ),
+      child: Text(
+        label,
+        textAlign: TextAlign.left,
+        style: TextStyle(
+          color: colorScheme.primary,
+          decoration: TextDecoration.underline,
         ),
       ),
     );
