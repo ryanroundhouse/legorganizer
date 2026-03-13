@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -43,98 +44,54 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  static const _splashDelay = Duration(seconds: 1);
+
+  Timer? _navigationTimer;
+  bool _didNavigate = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
+    _navigationTimer = Timer(_splashDelay, _goToApp);
+  }
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (context) => const AppShell(),
-        ),
-      );
-    });
+  @override
+  void dispose() {
+    _navigationTimer?.cancel();
+    super.dispose();
+  }
+
+  void _goToApp() {
+    if (!mounted || _didNavigate) {
+      return;
+    }
+    _didNavigate = true;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (context) => const AppShell(),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              BrandColors.cosmic,
-              BrandColors.violet,
-              BrandColors.midnight,
-            ],
-          ),
-        ),
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _goToApp,
         child: Stack(
           fit: StackFit.expand,
-          children: [
-            Opacity(
-              opacity: 0.25,
-              child: CustomPaint(painter: _SplashHorizonPainter()),
-            ),
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 170,
-                    height: 170,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          BrandColors.sunset,
-                          BrandColors.glow,
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'LEGORGANIZER',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          color: colorScheme.onPrimary,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 2.1,
-                        ),
-                  ),
-                ],
-              ),
+          children: const [
+            ColoredBox(color: Colors.black),
+            Image(
+              image: AssetImage('assets/splash.png'),
+              fit: BoxFit.cover,
             ),
           ],
         ),
       ),
     );
   }
-}
-
-class _SplashHorizonPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0x55B86CFF)
-      ..strokeWidth = 1.4;
-    const startYRatio = 0.58;
-    final startY = size.height * startYRatio;
-    for (double y = startY; y < size.height; y += 10) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class AppShell extends StatefulWidget {
@@ -151,9 +108,18 @@ class _AppShellState extends State<AppShell> {
   final GlobalKey<_AddPieceScreenState> _addPieceKey =
       GlobalKey<_AddPieceScreenState>();
 
+  void _goHome() {
+    _addPieceKey.currentState?.resetForm();
+    setState(() => _selectedIndex = 0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pieceGridKey.currentState?.refreshPieces();
+    });
+  }
+
   void _openAddPageWithLegoId(String legoId) {
     setState(() => _selectedIndex = 1);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addPieceKey.currentState?.refreshInventory();
       _addPieceKey.currentState?.prefillLegoId(legoId);
     });
   }
@@ -165,7 +131,10 @@ class _AppShellState extends State<AppShell> {
         key: _pieceGridKey,
         onPredictedLegoIdMissing: _openAddPageWithLegoId,
       ),
-      AddPieceScreen(key: _addPieceKey),
+      AddPieceScreen(
+        key: _addPieceKey,
+        onBackHome: _goHome,
+      ),
     ];
 
     return Scaffold(
@@ -187,6 +156,12 @@ class _AppShellState extends State<AppShell> {
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) {
           setState(() => _selectedIndex = index);
+          if (index == 0) {
+            _pieceGridKey.currentState?.refreshPieces();
+          }
+          if (index == 1) {
+            _addPieceKey.currentState?.refreshInventory();
+          }
         },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
@@ -465,80 +440,145 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
     required List<String> categoryOptions,
     required List<String> boxOptions,
   }) async {
+    const dialogBackgroundColor = Color(0xFFE3DCF2);
+    const sectionHeaderColor = Color(0xFF5D3E9B);
+    const sectionHeaderTextColor = Color(0xFFB7ACCD);
+
     final result = await showDialog<_PieceFilterSelection>(
       context: context,
       builder: (context) {
+        Widget buildFilterSection({
+          required String title,
+          required List<Widget> options,
+          required String clearLabel,
+          required VoidCallback onClear,
+        }) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: double.infinity,
+                color: sectionHeaderColor,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                  vertical: AppSpacing.sm,
+                ),
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: sectionHeaderTextColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 18,
+                  ),
+                ),
+              ),
+              ...options,
+              const Divider(height: 1, thickness: 0.75),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                ),
+                leading: const Icon(Icons.clear),
+                title: Text(
+                  clearLabel,
+                  style: const TextStyle(fontSize: 18),
+                ),
+                onTap: onClear,
+              ),
+            ],
+          );
+        }
+
         return AlertDialog(
-          title: const Text('Filter pieces'),
+          backgroundColor: dialogBackgroundColor,
+          title: const Center(
+            child: Text(
+              'Filter Pieces',
+              style: TextStyle(fontSize: 22),
+            ),
+          ),
+          contentPadding: const EdgeInsets.only(bottom: AppSpacing.md),
           content: SizedBox(
             width: 360,
             child: categoryOptions.isEmpty && boxOptions.isEmpty
                 ? const Text('No filters available.')
                 : SingleChildScrollView(
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        const SizedBox(height: AppSpacing.md),
                         if (categoryOptions.isNotEmpty) ...[
-                          const Text('Category'),
-                          const SizedBox(height: 6),
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.clear),
-                            title: const Text('Clear category'),
-                            onTap: () => Navigator.of(context).pop(
+                          buildFilterSection(
+                            title: 'Category',
+                            clearLabel: 'Clear category',
+                            onClear: () => Navigator.of(context).pop(
                               _PieceFilterSelection(
                                 categoryId: null,
                                 box: _selectedBox,
                               ),
                             ),
-                          ),
-                          ...categoryOptions.map(
-                            (partCatId) => RadioListTile<String>(
-                              value: partCatId,
-                              groupValue: _selectedPartCatId,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(_categoryLabel(partCatId)),
-                              onChanged: (value) => Navigator.of(context).pop(
-                                _PieceFilterSelection(
-                                  categoryId: value,
-                                  box: _selectedBox,
-                                ),
-                              ),
-                            ),
+                            options: categoryOptions
+                                .map(
+                                  (partCatId) => RadioListTile<String>(
+                                    value: partCatId,
+                                    groupValue: _selectedPartCatId,
+                                    dense: true,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: AppSpacing.md,
+                                    ),
+                                    title: Text(
+                                      _categoryLabel(partCatId),
+                                      style: const TextStyle(fontSize: 18),
+                                    ),
+                                    onChanged: (value) =>
+                                        Navigator.of(context).pop(
+                                      _PieceFilterSelection(
+                                        categoryId: value,
+                                        box: _selectedBox,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
                           ),
                         ],
                         if (categoryOptions.isNotEmpty && boxOptions.isNotEmpty)
                           const SizedBox(height: 10),
                         if (boxOptions.isNotEmpty) ...[
-                          const Text('Box'),
-                          const SizedBox(height: 6),
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.clear),
-                            title: const Text('Clear box'),
-                            onTap: () => Navigator.of(context).pop(
+                          buildFilterSection(
+                            title: 'Box',
+                            clearLabel: 'Clear box',
+                            onClear: () => Navigator.of(context).pop(
                               _PieceFilterSelection(
                                 categoryId: _selectedPartCatId,
                                 box: null,
                               ),
                             ),
-                          ),
-                          ...boxOptions.map(
-                            (box) => RadioListTile<String>(
-                              value: box,
-                              groupValue: _selectedBox,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(box),
-                              onChanged: (value) => Navigator.of(context).pop(
-                                _PieceFilterSelection(
-                                  categoryId: _selectedPartCatId,
-                                  box: value,
-                                ),
-                              ),
-                            ),
+                            options: boxOptions
+                                .map(
+                                  (box) => RadioListTile<String>(
+                                    value: box,
+                                    groupValue: _selectedBox,
+                                    dense: true,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: AppSpacing.md,
+                                    ),
+                                    title: Text(
+                                      box,
+                                      style: const TextStyle(fontSize: 18),
+                                    ),
+                                    onChanged: (value) =>
+                                        Navigator.of(context).pop(
+                                      _PieceFilterSelection(
+                                        categoryId: _selectedPartCatId,
+                                        box: value,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
                           ),
                         ],
                       ],
@@ -857,6 +897,15 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
     _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
   }
 
+  void refreshPieces() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+    });
+  }
+
   @override
   void dispose() {
     _gridScrollController.dispose();
@@ -1040,36 +1089,36 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
           backgroundColor: surfaceColor,
           surfaceTintColor: Colors.transparent,
           scrolledUnderElevation: 0,
+          centerTitle: true,
+          leading: PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            tooltip: 'Menu',
+            onSelected: (value) {
+              if (value == _importMenuAction) {
+                _importPiecesJson();
+              } else if (value == _exportMenuAction) {
+                _exportPiecesJson();
+              } else if (value == _aboutMenuAction) {
+                _showAboutDialog();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: _importMenuAction,
+                child: Text('Import'),
+              ),
+              PopupMenuItem<String>(
+                value: _exportMenuAction,
+                child: Text('Export'),
+              ),
+              PopupMenuItem<String>(
+                value: _aboutMenuAction,
+                child: Text('About'),
+              ),
+            ],
+          ),
           title: const Text('Legorganizer'),
-          actions: [
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.menu),
-              tooltip: 'Menu',
-              onSelected: (value) {
-                if (value == _importMenuAction) {
-                  _importPiecesJson();
-                } else if (value == _exportMenuAction) {
-                  _exportPiecesJson();
-                } else if (value == _aboutMenuAction) {
-                  _showAboutDialog();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem<String>(
-                  value: _importMenuAction,
-                  child: Text('Import'),
-                ),
-                PopupMenuItem<String>(
-                  value: _exportMenuAction,
-                  child: Text('Export'),
-                ),
-                PopupMenuItem<String>(
-                  value: _aboutMenuAction,
-                  child: Text('About'),
-                ),
-              ],
-            ),
-          ],
+          actions: const [SizedBox(width: kToolbarHeight)],
         ),
         body: ColoredBox(
           color: surfaceColor,
@@ -1085,7 +1134,8 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                   message: 'Failed to load pieces: ${snapshot.error}',
                   onRetry: () {
                     setState(() {
-                      _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+                      _piecesFuture =
+                          widget.piecesLoader?.call() ?? _loadPieces();
                     });
                   },
                 );
@@ -1096,11 +1146,13 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
               if (pieces.isEmpty) {
                 return AppEmptyState(
                   title: 'No pieces yet',
-                  message: 'Add a piece from the Add tab or import a JSON backup.',
+                  message:
+                      'Add a piece from the Add tab or import a JSON backup.',
                   actionLabel: 'Retry',
                   onActionPressed: () {
                     setState(() {
-                      _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+                      _piecesFuture =
+                          widget.piecesLoader?.call() ?? _loadPieces();
                     });
                   },
                 );
@@ -1135,42 +1187,62 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                 padding: const EdgeInsets.all(AppSpacing.sm),
                 child: Column(
                   children: [
-                    Material(
-                      color: surfaceColor,
-                      child: TextField(
-                        onChanged: (value) =>
-                            setState(() => _searchQuery = value),
-                        decoration: InputDecoration(
-                          labelText: 'Search pieces',
-                          hintText: 'Type part name or LEGO ID',
-                          prefixIcon: const Icon(Icons.search),
-                          filled: true,
-                          fillColor: colorScheme.surfaceContainerHighest,
-                          border: const OutlineInputBorder(),
-                          suffixIcon: Padding(
-                            padding: const EdgeInsets.only(right: AppSpacing.xxs),
-                            child: Material(
-                              color: hasAnyFilter
-                                  ? colorScheme.primaryContainer
-                                  : colorScheme.surface,
-                              shape: const CircleBorder(),
-                              elevation: 2,
-                              child: IconButton(
-                                tooltip: 'Filter pieces',
-                                onPressed: () => _showFilterDialog(
-                                  categoryOptions: categoryOptions,
-                                  boxOptions: boxOptions,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            onChanged: (value) =>
+                                setState(() => _searchQuery = value),
+                            decoration: InputDecoration(
+                              hintText: 'Type part name or LEGO ID',
+                              prefixIcon: const Icon(Icons.search),
+                              filled: true,
+                              fillColor: const Color(0xFFE3DBF1),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: AppSpacing.md,
+                                vertical: AppSpacing.md,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                borderSide: BorderSide(
+                                  color: colorScheme.outlineVariant,
                                 ),
-                                icon: Icon(
-                                  Icons.filter_list,
-                                  color:
-                                      hasAnyFilter ? colorScheme.primary : null,
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(28),
+                                borderSide: BorderSide(
+                                  color: colorScheme.primary,
+                                  width: 2,
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Material(
+                          color: Theme.of(context)
+                                  .floatingActionButtonTheme
+                                  .backgroundColor ??
+                              colorScheme.primary,
+                          shape: const CircleBorder(),
+                          elevation: 2,
+                          child: IconButton(
+                            tooltip: 'Filter pieces',
+                            onPressed: () => _showFilterDialog(
+                              categoryOptions: categoryOptions,
+                              boxOptions: boxOptions,
+                            ),
+                            icon: const Icon(Icons.filter_list),
+                            color: Theme.of(context)
+                                    .floatingActionButtonTheme
+                                    .foregroundColor ??
+                                colorScheme.onPrimary,
+                          ),
+                        ),
+                      ],
                     ),
                     if (hasSearch || hasAnyFilter) ...[
                       const SizedBox(height: AppSpacing.xs),
@@ -1184,7 +1256,8 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                                 children: [
                                   if (hasSearch)
                                     InputChip(
-                                      label: Text('Search: ${_searchQuery.trim()}'),
+                                      label: Text(
+                                          'Search: ${_searchQuery.trim()}'),
                                       onDeleted: () => setState(
                                         () => _searchQuery = '',
                                       ),
@@ -1243,7 +1316,8 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                                   itemCount: filteredPieces.length,
                                   gridDelegate:
                                       const SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: AppGrid.maxCrossAxisExtent,
+                                    maxCrossAxisExtent:
+                                        AppGrid.maxCrossAxisExtent,
                                     crossAxisSpacing: AppGrid.spacing,
                                     mainAxisSpacing: AppGrid.spacing,
                                     childAspectRatio: AppGrid.childAspectRatio,
@@ -1419,142 +1493,181 @@ class PieceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final binNumber = _binNumberOrNull(piece.bin);
     final colorScheme = Theme.of(context).colorScheme;
+    const tileColor = Colors.white;
+    const tileShadow = Color(0x14000000);
 
-    return InkWell(
-      borderRadius: AppRadius.card,
-      onTap: () {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text('${piece.name} is in ${piece.bin}'),
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-      },
-      onLongPress: () => _showEditDialog(context),
-      onSecondaryTap: () => _showEditDialog(context),
-      child: Ink(
-        decoration: BoxDecoration(
-          borderRadius: AppRadius.card,
-          border: Border.all(color: colorScheme.outlineVariant),
-          color: colorScheme.surface,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: ClipRRect(
-                        borderRadius: AppRadius.image,
-                        child: Image.asset(
-                          piece.imageAsset,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest,
-                            ),
-                            child: Icon(
-                              Icons.image_not_supported_outlined,
-                              size: 42,
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                      ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: AppRadius.card,
+        onTap: () {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                content: Text('${piece.name} is in ${piece.bin}'),
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+        },
+        onLongPress: () => _showEditDialog(context),
+        onSecondaryTap: () => _showEditDialog(context),
+        child: Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            borderRadius: AppRadius.card,
+            border: Border.all(color: const Color(0xFFE9E9EF)),
+            color: tileColor,
+            boxShadow: const [
+              BoxShadow(
+                color: tileShadow,
+                blurRadius: 16,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFDFDFF),
+                      borderRadius: AppRadius.image,
+                      border: Border.all(color: const Color(0xFFF0F0F4)),
                     ),
-                    if (binNumber != null)
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: colorScheme.error,
-                            shape: BoxShape.circle,
-                          ),
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
                           child: Padding(
-                            padding: const EdgeInsets.all(5),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
-                                binNumber,
-                                style: TextStyle(
-                                  color: colorScheme.onError,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  height: 1,
+                            padding: const EdgeInsets.all(14),
+                            child: ClipRRect(
+                              borderRadius: AppRadius.image,
+                              child: Image.asset(
+                                piece.imageAsset,
+                                fit: BoxFit.contain,
+                                errorBuilder: (_, __, ___) => DecoratedBox(
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFF7F7FA),
+                                  ),
+                                  child: Icon(
+                                    Icons.image_not_supported_outlined,
+                                    size: 42,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
                                 ),
-                                maxLines: 1,
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    if (!piece.present)
-                      const Positioned(
-                        top: 8,
-                        left: 8,
-                        child: Chip(label: Text('Missing')),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          piece.name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'ID: ${piece.legoId}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
+                        if (binNumber != null)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: colorScheme.error,
+                                shape: BoxShape.circle,
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x26000000),
+                                    blurRadius: 8,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(5),
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    binNumber,
+                                    style: TextStyle(
+                                      color: colorScheme.onError,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      height: 1,
+                                    ),
+                                    maxLines: 1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (!piece.present)
+                          const Positioned(
+                            top: 8,
+                            left: 8,
+                            child: Chip(label: Text('Missing')),
+                          ),
                       ],
                     ),
                   ),
-                  PopupMenuButton<String>(
-                    tooltip: 'Piece actions',
-                    icon: const Icon(Icons.more_vert),
-                    onSelected: (value) {
-                      if (value == 'edit') {
-                        _showEditDialog(context);
-                      } else if (value == 'delete') {
-                        _showDeleteDialog(context);
-                      }
-                    },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem<String>(
-                        value: 'edit',
-                        child: Text('Edit bin'),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            piece.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF1A1A1F),
+                                ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'ID: ${piece.legoId}',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
+                                  color: const Color(0xFF575761),
+                                ),
+                          ),
+                        ],
                       ),
-                      PopupMenuItem<String>(
-                        value: 'delete',
-                        child: Text('Delete piece'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ],
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: 'Piece actions',
+                      icon: const Icon(Icons.more_vert),
+                      onSelected: (value) {
+                        if (value == 'edit') {
+                          _showEditDialog(context);
+                        } else if (value == 'delete') {
+                          _showDeleteDialog(context);
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem<String>(
+                          value: 'edit',
+                          child: Text('Edit bin'),
+                        ),
+                        PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Text('Delete piece'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1563,7 +1676,12 @@ class PieceTile extends StatelessWidget {
 }
 
 class AddPieceScreen extends StatefulWidget {
-  const AddPieceScreen({super.key});
+  const AddPieceScreen({
+    super.key,
+    required this.onBackHome,
+  });
+
+  final VoidCallback onBackHome;
 
   @override
   State<AddPieceScreen> createState() => _AddPieceScreenState();
@@ -1606,6 +1724,28 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     _lookup();
   }
 
+  Future<void> refreshInventory() async {
+    try {
+      final pieces = await PieceStorage.loadPieces();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _pieces = pieces;
+        _pieceNamesById = _buildPieceNameMap(pieces);
+      });
+    } catch (_) {
+      // Leave the current state intact if storage refresh fails.
+    }
+  }
+
+  void resetForm() {
+    _controller.clear();
+    _binController.clear();
+    _foundPart = null;
+    _status = null;
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -1640,9 +1780,14 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     }
   }
 
-  void _lookup() {
+  Future<void> _lookup() async {
     final legoId = _controller.text.trim();
     if (_loading) {
+      return;
+    }
+
+    await refreshInventory();
+    if (!mounted) {
       return;
     }
 
@@ -1696,6 +1841,11 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       return;
     }
 
+    await refreshInventory();
+    if (!mounted) {
+      return;
+    }
+
     if (_pieceNamesById.containsKey(part.partNum)) {
       setState(() {
         _setStatus(
@@ -1728,7 +1878,11 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       setState(() {
         _pieces = updatedPieces;
         _pieceNamesById = _buildPieceNameMap(updatedPieces);
-        _setStatus('Added ${part.partNum} to your inventory.', StatusTone.success);
+        _controller.clear();
+        _binController.clear();
+        _foundPart = null;
+        _setStatus(
+            'Added ${part.partNum} to your inventory.', StatusTone.success);
       });
 
       ScaffoldMessenger.of(context)
@@ -1915,6 +2069,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    const addPageButtonColor = Color(0xFF4D2F84);
     final foundPart = _foundPart;
     final enteredLegoId = _controller.text.trim();
     final imageAsset =
@@ -1923,7 +2078,17 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         foundPart != null && !_pieceNamesById.containsKey(foundPart.partNum);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Add LEGO Piece')),
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back to home',
+          onPressed: () {
+            setState(resetForm);
+            widget.onBackHome();
+          },
+        ),
+        title: const Text('Add LEGO Piece'),
+      ),
       body: SafeArea(
         child: _loading
             ? const AppLoadingState(message: 'Loading part catalog...')
@@ -1955,6 +2120,10 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                             onPressed: _cameraLookupLoading
                                 ? null
                                 : _captureAndPredictPart,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: addPageButtonColor,
+                              foregroundColor: Colors.white,
+                            ),
                             icon: _cameraLookupLoading
                                 ? const SizedBox(
                                     width: 16,
@@ -1987,48 +2156,127 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                           ],
                           const SizedBox(height: AppSpacing.md),
                           if (foundPart != null)
-                            Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(AppSpacing.sm),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      foundPart.name,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium,
+                            Align(
+                              alignment: Alignment.center,
+                              child: FractionallySizedBox(
+                                widthFactor: 0.5,
+                                child: Container(
+                                  clipBehavior: Clip.antiAlias,
+                                  decoration: BoxDecoration(
+                                    borderRadius: AppRadius.card,
+                                    border: Border.all(
+                                      color: const Color(0xFFE9E9EF),
                                     ),
-                                    const SizedBox(height: AppSpacing.xs),
-                                    Text('LEGO ID: ${foundPart.partNum}'),
-                                    const SizedBox(height: AppSpacing.sm),
-                                    SizedBox(
-                                      height: 200,
-                                      child: Center(
-                                        child: Image.asset(
-                                          imageAsset,
-                                          fit: BoxFit.contain,
-                                          errorBuilder: (_, __, ___) =>
-                                              DecoratedBox(
+                                    color: Colors.white,
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x14000000),
+                                        blurRadius: 16,
+                                        offset: Offset(0, 4),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        AspectRatio(
+                                          aspectRatio: 1.28,
+                                          child: DecoratedBox(
                                             decoration: BoxDecoration(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .surfaceContainerHighest,
+                                              color: const Color(0xFFFDFDFF),
                                               borderRadius: AppRadius.image,
+                                              border: Border.all(
+                                                color:
+                                                    const Color(0xFFF0F0F4),
+                                              ),
                                             ),
-                                            child: const SizedBox(
-                                              width: double.infinity,
-                                              child: Center(
-                                                child: Text(
-                                                  'Image not found for this LEGO ID.',
+                                            child: Padding(
+                                              padding:
+                                                  const EdgeInsets.all(14),
+                                              child: ClipRRect(
+                                                borderRadius: AppRadius.image,
+                                                child: Image.asset(
+                                                  imageAsset,
+                                                  fit: BoxFit.contain,
+                                                  errorBuilder:
+                                                      (_, __, ___) =>
+                                                          const DecoratedBox(
+                                                    decoration: BoxDecoration(
+                                                      color:
+                                                          Color(0xFFF7F7FA),
+                                                    ),
+                                                    child: Center(
+                                                      child: Icon(
+                                                        Icons
+                                                            .image_not_supported_outlined,
+                                                        size: 42,
+                                                        color: Color(
+                                                          0xFF575761,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
                                             ),
                                           ),
                                         ),
-                                      ),
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    foundPart.name,
+                                                    maxLines: 2,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .titleMedium
+                                                        ?.copyWith(
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          color: const Color(
+                                                            0xFF1A1A1F,
+                                                          ),
+                                                        ),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    'ID: ${foundPart.partNum}',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .bodyMedium
+                                                        ?.copyWith(
+                                                          color: const Color(
+                                                            0xFF575761,
+                                                          ),
+                                                        ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const Padding(
+                                              padding: EdgeInsets.only(top: 2),
+                                              child: Icon(
+                                                Icons.more_vert,
+                                                color: Color(0xFF2D2D33),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             )
@@ -2040,7 +2288,8 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                               icon: Icons.search,
                             ),
                           SizedBox(
-                            height: AppSpacing.lg + MediaQuery.of(context).viewInsets.bottom,
+                            height: AppSpacing.lg +
+                                MediaQuery.of(context).viewInsets.bottom,
                           ),
                         ],
                       ),
@@ -2057,6 +2306,10 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                       ),
                       child: FilledButton.icon(
                         onPressed: canAdd ? _addPart : null,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: addPageButtonColor,
+                          foregroundColor: Colors.white,
+                        ),
                         icon: const Icon(Icons.add),
                         label: const Text('Add to inventory'),
                       ),

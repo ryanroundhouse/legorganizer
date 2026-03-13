@@ -5,9 +5,11 @@ abstract final class BrandColors {
   static const Color cosmic = Color(0xFF1A0E47);
   static const Color violet = Color(0xFF5B2ECF);
   static const Color magenta = Color(0xFFD74FFF);
+  static const Color berry = Color(0xFFB0367A);
   static const Color sunset = Color(0xFFFFD766);
   static const Color glow = Color(0xFFFF7ABD);
-  static const Color lavenderSurface = Color(0xFFF5F1FF);
+  static const Color lavenderSurface = Color(0xFFF5F0FB);
+  static const Color lavenderNav = Color(0xFFE1DAF2);
 }
 
 ThemeData buildLightTheme() {
@@ -58,7 +60,7 @@ ThemeData buildLightTheme() {
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: scheme.surface,
+      backgroundColor: BrandColors.lavenderNav,
       indicatorColor: scheme.primaryContainer,
       labelTextStyle: WidgetStateProperty.resolveWith((states) {
         final selected = states.contains(WidgetState.selected);
@@ -69,8 +71,9 @@ ThemeData buildLightTheme() {
       }),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
-      backgroundColor: scheme.secondary,
-      foregroundColor: scheme.onSecondary,
+      backgroundColor: BrandColors.berry,
+      foregroundColor: Colors.white,
+      shape: const CircleBorder(),
     ),
     cardTheme: CardThemeData(
       color: scheme.surface,
@@ -157,11 +160,13 @@ ThemeData buildDarkTheme() {
       }),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
-      backgroundColor: scheme.secondary,
-      foregroundColor: scheme.onSecondary,
+      backgroundColor: BrandColors.berry,
+      foregroundColor: Colors.white,
+      shape: const CircleBorder(),
     ),
     cardTheme: CardThemeData(
-      color: Color.alphaBlend(BrandColors.cosmic.withValues(alpha: 0.45), scheme.surface),
+      color: Color.alphaBlend(
+          BrandColors.cosmic.withValues(alpha: 0.45), scheme.surface),
       elevation: 1,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),

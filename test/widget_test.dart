@@ -1,8 +1,37 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:lego_bin/main.dart';
 import 'package:lego_bin/ui/design_tokens.dart';
+
+void _noop() {}
+
+class _TestAssetBundle extends CachingAssetBundle {
+  @override
+  Future<String> loadString(String key, {bool cache = true}) async {
+    if (key == 'assets/data/parts.csv') {
+      return 'part_num,name,part_cat_id,part_material\n3009,Brick 1 x 6,7,Plastic\n';
+    }
+    return super.loadString(key, cache: cache);
+  }
+
+  @override
+  Future<ByteData> load(String key) async {
+    if (key == 'assets/data/parts.csv') {
+      final bytes = Uint8List.fromList(
+        utf8.encode(
+          'part_num,name,part_cat_id,part_material\n3009,Brick 1 x 6,7,Plastic\n',
+        ),
+      );
+      return ByteData.view(bytes.buffer);
+    }
+    throw FlutterError('Asset not found: $key');
+  }
+}
 
 void main() {
   testWidgets('shows LEGO pieces from provided loader', (
@@ -385,8 +414,11 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
-      const MaterialApp(
-        home: AddPieceScreen(),
+      DefaultAssetBundle(
+        bundle: _TestAssetBundle(),
+        child: const MaterialApp(
+          home: AddPieceScreen(onBackHome: _noop),
+        ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 200));
@@ -395,4 +427,5 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsWidgets);
     expect(tester.takeException(), isNull);
   });
+
 }
