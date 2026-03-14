@@ -29,8 +29,7 @@ class LegoBinApp extends StatelessWidget {
     return MaterialApp(
       title: 'Legorganizer',
       theme: buildLightTheme(),
-      darkTheme: buildDarkTheme(),
-      themeMode: ThemeMode.system,
+      themeMode: ThemeMode.light,
       home: const SplashScreen(),
     );
   }
