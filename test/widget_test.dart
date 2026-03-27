@@ -16,6 +16,9 @@ class _TestAssetBundle extends CachingAssetBundle {
     if (key == 'assets/data/parts.csv') {
       return 'part_num,name,part_cat_id,part_material\n3009,Brick 1 x 6,7,Plastic\n';
     }
+    if (key == PieceGridScreen.dataPath) {
+      return '[]';
+    }
     return super.loadString(key, cache: cache);
   }
 
@@ -27,6 +30,10 @@ class _TestAssetBundle extends CachingAssetBundle {
           'part_num,name,part_cat_id,part_material\n3009,Brick 1 x 6,7,Plastic\n',
         ),
       );
+      return ByteData.view(bytes.buffer);
+    }
+    if (key == PieceGridScreen.dataPath) {
+      final bytes = Uint8List.fromList(utf8.encode('[]'));
       return ByteData.view(bytes.buffer);
     }
     throw FlutterError('Asset not found: $key');

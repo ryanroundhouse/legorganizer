@@ -1688,6 +1688,7 @@ class AddPieceScreen extends StatefulWidget {
 
 class _AddPieceScreenState extends State<AddPieceScreen> {
   static const String _partsPath = 'assets/data/parts.csv';
+  static const String _unknownBinLabel = 'Unknown Bin';
 
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _binController = TextEditingController();
@@ -1806,17 +1807,25 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       return;
     }
 
-    final existingPieceName = _pieceNamesById[legoId];
-    if (existingPieceName != null) {
+    final existingPiece = _existingPieceForId(legoId);
+    if (existingPiece != null) {
+      if (_hasSavedBin(existingPiece.bin)) {
+        _binController.text = existingPiece.bin.trim();
+        _binController.selection = TextSelection.collapsed(
+          offset: _binController.text.length,
+        );
+      }
+      final existingCatalogPart = _findPartByLegoId(legoId);
       setState(() {
         _foundPart = PartRecord(
           partNum: legoId,
-          name: existingPieceName,
-          partCatId: '',
-          partMaterial: '',
+          name: existingPiece.name,
+          partCatId:
+              existingCatalogPart?.partCatId ?? existingPiece.partCatId,
+          partMaterial: existingCatalogPart?.partMaterial ?? '',
         );
         _setStatus(
-          'Part $legoId is already in your inventory and cannot be added.',
+          'Part $legoId is already in your inventory. You can update its bin below.',
           StatusTone.warning,
         );
       });
@@ -1845,18 +1854,59 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       return;
     }
 
-    if (_pieceNamesById.containsKey(part.partNum)) {
-      setState(() {
-        _setStatus(
-          'Part ${part.partNum} already exists in your inventory.',
-          StatusTone.warning,
-        );
-      });
-      return;
-    }
-
     final enteredBin = _binController.text.trim();
     final bin = enteredBin;
+    final existingPiece = _existingPieceForId(part.partNum);
+
+    if (existingPiece != null) {
+      final updatedPieces = _pieces
+          .map(
+            (currentPiece) => currentPiece.legoId == part.partNum
+                ? currentPiece.copyWith(
+                    bin: bin,
+                    name: part.name,
+                    imageAsset: 'assets/pieces/${part.partNum}.png',
+                    partCatId: part.partCatId,
+                  )
+                : currentPiece,
+          )
+          .toList();
+
+      try {
+        await PieceStorage.savePieces(updatedPieces);
+
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _pieces = updatedPieces;
+          _pieceNamesById = _buildPieceNameMap(updatedPieces);
+          _controller.clear();
+          _foundPart = null;
+          _setStatus(
+            'Updated ${part.partNum} bin in your inventory.',
+            StatusTone.success,
+          );
+        });
+
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text('Updated ${part.partNum} bin'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      } catch (error) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _setStatus('Could not save piece changes: $error', StatusTone.error);
+        });
+      }
+      return;
+    }
 
     final newPiece = LegoPiece(
       name: part.name,
@@ -1878,7 +1928,6 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         _pieces = updatedPieces;
         _pieceNamesById = _buildPieceNameMap(updatedPieces);
         _controller.clear();
-        _binController.clear();
         _foundPart = null;
         _setStatus(
             'Added ${part.partNum} to your inventory.', StatusTone.success);
@@ -2066,15 +2115,42 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     return String.fromCharCodes(chars);
   }
 
+  LegoPiece? _existingPieceForId(String legoId) {
+    final normalized = _normalizeLegoId(legoId);
+    for (final piece in _pieces) {
+      if (_normalizeLegoId(piece.legoId) == normalized) {
+        return piece;
+      }
+    }
+    return null;
+  }
+
+  bool _hasSavedBin(String rawBin) {
+    final trimmed = rawBin.trim();
+    return trimmed.isNotEmpty && trimmed != _unknownBinLabel;
+  }
+
+  String? _binNumberOrNull(String rawBin) {
+    final match = RegExp(r'\d+').firstMatch(rawBin);
+    return match?.group(0);
+  }
+
   @override
   Widget build(BuildContext context) {
     const addPageButtonColor = Color(0xFF4D2F84);
     final foundPart = _foundPart;
     final enteredLegoId = _controller.text.trim();
-    final imageAsset =
-        enteredLegoId.isEmpty ? '' : 'assets/pieces/$enteredLegoId.png';
-    final canAdd =
-        foundPart != null && !_pieceNamesById.containsKey(foundPart.partNum);
+    final existingPiece =
+        enteredLegoId.isEmpty ? null : _existingPieceForId(enteredLegoId);
+    final imageAsset = existingPiece?.imageAsset.isNotEmpty == true
+        ? existingPiece!.imageAsset
+        : enteredLegoId.isEmpty
+            ? ''
+            : 'assets/pieces/$enteredLegoId.png';
+    final binPreviewValue = _binController.text.trim();
+    final binNumber = _binNumberOrNull(binPreviewValue);
+    final canSave = foundPart != null;
+    final isExistingPiece = foundPart != null && existingPiece != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -2141,6 +2217,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                           const SizedBox(height: AppSpacing.sm),
                           TextField(
                             controller: _binController,
+                            onChanged: (_) => setState(() {}),
                             decoration: const InputDecoration(
                               labelText: 'Bin',
                               hintText: 'Example: Bin 12',
@@ -2192,34 +2269,99 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                                                     const Color(0xFFF0F0F4),
                                               ),
                                             ),
-                                            child: Padding(
-                                              padding:
-                                                  const EdgeInsets.all(14),
-                                              child: ClipRRect(
-                                                borderRadius: AppRadius.image,
-                                                child: Image.asset(
-                                                  imageAsset,
-                                                  fit: BoxFit.contain,
-                                                  errorBuilder:
-                                                      (_, __, ___) =>
-                                                          const DecoratedBox(
-                                                    decoration: BoxDecoration(
-                                                      color:
-                                                          Color(0xFFF7F7FA),
-                                                    ),
-                                                    child: Center(
-                                                      child: Icon(
-                                                        Icons
-                                                            .image_not_supported_outlined,
-                                                        size: 42,
-                                                        color: Color(
-                                                          0xFF575761,
+                                            child: Stack(
+                                              children: [
+                                                Positioned.fill(
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.all(
+                                                          14,
                                                         ),
+                                                    child: ClipRRect(
+                                                      borderRadius:
+                                                          AppRadius.image,
+                                                      child: Image.asset(
+                                                        imageAsset,
+                                                        fit: BoxFit.contain,
+                                                        errorBuilder:
+                                                            (_, __, ___) =>
+                                                                const DecoratedBox(
+                                                                  decoration:
+                                                                      BoxDecoration(
+                                                                        color: Color(
+                                                                          0xFFF7F7FA,
+                                                                        ),
+                                                                      ),
+                                                                  child: Center(
+                                                                    child: Icon(
+                                                                      Icons
+                                                                          .image_not_supported_outlined,
+                                                                      size: 42,
+                                                                      color: Color(
+                                                                        0xFF575761,
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ),
                                                       ),
                                                     ),
                                                   ),
                                                 ),
-                                              ),
+                                                if (binNumber != null)
+                                                  Positioned(
+                                                    top: 8,
+                                                    right: 8,
+                                                    child: Container(
+                                                      width: 40,
+                                                      height: 40,
+                                                      alignment:
+                                                          Alignment.center,
+                                                      decoration: BoxDecoration(
+                                                        color: Theme.of(context)
+                                                            .colorScheme
+                                                            .error,
+                                                        shape: BoxShape.circle,
+                                                        boxShadow: const [
+                                                          BoxShadow(
+                                                            color: Color(
+                                                              0x26000000,
+                                                            ),
+                                                            blurRadius: 8,
+                                                            offset: Offset(
+                                                              0,
+                                                              2,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      child: Padding(
+                                                        padding:
+                                                            const EdgeInsets.all(
+                                                              5,
+                                                            ),
+                                                        child: FittedBox(
+                                                          fit: BoxFit.scaleDown,
+                                                          child: Text(
+                                                            binNumber,
+                                                            style: TextStyle(
+                                                              color: Theme.of(
+                                                                    context,
+                                                                  )
+                                                                  .colorScheme
+                                                                  .onError,
+                                                              fontSize: 20,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                              height: 1,
+                                                            ),
+                                                            maxLines: 1,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
                                             ),
                                           ),
                                         ),
@@ -2304,13 +2446,17 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                         AppSpacing.md,
                       ),
                       child: FilledButton.icon(
-                        onPressed: canAdd ? _addPart : null,
+                        onPressed: canSave ? _addPart : null,
                         style: FilledButton.styleFrom(
                           backgroundColor: addPageButtonColor,
                           foregroundColor: Colors.white,
                         ),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add to inventory'),
+                        icon: Icon(
+                          isExistingPiece ? Icons.save_outlined : Icons.add,
+                        ),
+                        label: Text(
+                          isExistingPiece ? 'Save bin' : 'Add to inventory',
+                        ),
                       ),
                     ),
                   ),
