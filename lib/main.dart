@@ -123,12 +123,20 @@ class _AppShellState extends State<AppShell> {
     });
   }
 
+  void _openAddPage() {
+    setState(() => _selectedIndex = 1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _addPieceKey.currentState?.refreshInventory();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
       PieceGridScreen(
         key: _pieceGridKey,
         onPredictedLegoIdMissing: _openAddPageWithLegoId,
+        onAddRequested: _openAddPage,
       ),
       AddPieceScreen(
         key: _addPieceKey,
@@ -178,12 +186,14 @@ class PieceGridScreen extends StatefulWidget {
     this.piecesLoader,
     this.piecesSaver,
     this.onPredictedLegoIdMissing,
+    this.onAddRequested,
   });
 
   static const String dataPath = 'assets/data/pieces.json';
   final Future<List<LegoPiece>> Function()? piecesLoader;
   final Future<void> Function(List<LegoPiece>)? piecesSaver;
   final ValueChanged<String>? onPredictedLegoIdMissing;
+  final VoidCallback? onAddRequested;
 
   @override
   State<PieceGridScreen> createState() => _PieceGridScreenState();
@@ -323,8 +333,7 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   List<LegoPiece> _latestPieces = const [];
   double _lastGridWidth = 0;
 
-  static const _importMenuAction = 'import';
-  static const _exportMenuAction = 'export';
+  static const _optionsMenuAction = 'options';
   static const _aboutMenuAction = 'about';
   static const Map<String, String> _customCategoryNames = {
     '1': 'Baseplates',
@@ -771,6 +780,18 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
     );
   }
 
+  Future<void> _openOptionsScreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => OptionsScreen(
+          onImportPressed: _importPiecesJson,
+          onExportPressed: _exportPiecesJson,
+          onClearCollectionPressed: _clearCollection,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openAboutLink(String url) async {
     final uri = Uri.parse(url);
     final didLaunch =
@@ -884,6 +905,63 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
         ..showSnackBar(
           SnackBar(
             content: Text('Could not delete piece: $error'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    }
+  }
+
+  Future<void> _clearCollection() async {
+    final currentPieces = _latestPieces;
+    if (currentPieces.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Your collection is already empty.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      return;
+    }
+
+    setState(() {
+      _piecesFuture = Future.value(const <LegoPiece>[]);
+      _searchQuery = '';
+      _selectedPartCatId = null;
+      _selectedBox = null;
+      _latestPieces = const [];
+    });
+
+    try {
+      await (widget.piecesSaver ?? _savePieces).call(const <LegoPiece>[]);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Cleared ${currentPieces.length} pieces.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _piecesFuture = Future.value(currentPieces);
+        _latestPieces = currentPieces;
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Could not clear collection: $error'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -1093,22 +1171,16 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
             icon: const Icon(Icons.menu),
             tooltip: 'Menu',
             onSelected: (value) {
-              if (value == _importMenuAction) {
-                _importPiecesJson();
-              } else if (value == _exportMenuAction) {
-                _exportPiecesJson();
+              if (value == _optionsMenuAction) {
+                _openOptionsScreen();
               } else if (value == _aboutMenuAction) {
                 _showAboutDialog();
               }
             },
             itemBuilder: (context) => const [
               PopupMenuItem<String>(
-                value: _importMenuAction,
-                child: Text('Import'),
-              ),
-              PopupMenuItem<String>(
-                value: _exportMenuAction,
-                child: Text('Export'),
+                value: _optionsMenuAction,
+                child: Text('Options'),
               ),
               PopupMenuItem<String>(
                 value: _aboutMenuAction,
@@ -1147,13 +1219,18 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                   title: 'No pieces yet',
                   message:
                       'Add a piece from the Add tab or import a JSON backup.',
-                  actionLabel: 'Retry',
-                  onActionPressed: () {
-                    setState(() {
-                      _piecesFuture =
-                          widget.piecesLoader?.call() ?? _loadPieces();
-                    });
-                  },
+                  actions: [
+                    FilledButton.icon(
+                      onPressed: _importPiecesJson,
+                      icon: const Icon(Icons.file_upload_outlined),
+                      label: const Text('Import'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: widget.onAddRequested,
+                      icon: const Icon(Icons.add_box_outlined),
+                      label: const Text('Add'),
+                    ),
+                  ],
                 );
               }
 
@@ -1398,6 +1475,247 @@ class _InlineStatusData {
 
   final String message;
   final StatusTone tone;
+}
+
+class OptionsScreen extends StatelessWidget {
+  const OptionsScreen({
+    super.key,
+    required this.onImportPressed,
+    required this.onExportPressed,
+    required this.onClearCollectionPressed,
+  });
+
+  final Future<void> Function() onImportPressed;
+  final Future<void> Function() onExportPressed;
+  final Future<void> Function() onClearCollectionPressed;
+
+  Future<void> _confirmClearCollection(BuildContext context) async {
+    final shouldClear = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Clear collection?'),
+            content: const Text(
+              'This removes all blocks from your collection. This action cannot be undone.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                child: const Text('Clear collection'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!shouldClear) {
+      return;
+    }
+
+    await onClearCollectionPressed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return SafeArea(
+      child: Scaffold(
+        backgroundColor: colorScheme.surface,
+        appBar: AppBar(
+          title: const Text('Options'),
+          centerTitle: true,
+          backgroundColor: colorScheme.surface,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          children: [
+            _OptionsSection(
+              title: 'Backup',
+              subtitle: 'Import or export your collection JSON.',
+              children: [
+                _OptionsActionTile(
+                  icon: Icons.file_upload_outlined,
+                  title: 'Import collection',
+                  subtitle: 'Replace your current collection from a JSON file.',
+                  onTap: onImportPressed,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                _OptionsActionTile(
+                  icon: Icons.file_download_outlined,
+                  title: 'Export collection',
+                  subtitle: 'Save a JSON backup of your current collection.',
+                  onTap: onExportPressed,
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _OptionsSection(
+              title: 'Danger zone',
+              subtitle: 'Use destructive actions carefully.',
+              children: [
+                _OptionsActionTile(
+                  icon: Icons.delete_sweep_outlined,
+                  title: 'Clear collection',
+                  subtitle: 'Delete every block from your saved collection.',
+                  accentColor: colorScheme.error,
+                  onTap: () => _confirmClearCollection(context),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OptionsSection extends StatelessWidget {
+  const _OptionsSection({
+    required this.title,
+    required this.subtitle,
+    required this.children,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: AppRadius.card,
+        border: Border.all(color: const Color(0xFFE9E9EF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 16,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.onSurface,
+                  ),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              subtitle,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OptionsActionTile extends StatelessWidget {
+  const _OptionsActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.accentColor,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Future<void> Function() onTap;
+  final Color? accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final iconColor = accentColor ?? colorScheme.primary;
+    final iconBackground = accentColor == null
+        ? colorScheme.primaryContainer
+        : colorScheme.errorContainer;
+
+    return Material(
+      color: const Color(0xFFFDFDFF),
+      borderRadius: AppRadius.card,
+      child: InkWell(
+        borderRadius: AppRadius.card,
+        onTap: () {
+          onTap();
+        },
+        child: Ink(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          decoration: BoxDecoration(
+            borderRadius: AppRadius.card,
+            border: Border.all(color: colorScheme.outlineVariant),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: iconBackground,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: iconColor),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: accentColor ?? colorScheme.onSurface,
+                          ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class PieceTile extends StatelessWidget {

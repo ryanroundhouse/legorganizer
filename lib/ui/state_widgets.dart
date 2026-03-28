@@ -29,6 +29,7 @@ class AppEmptyState extends StatelessWidget {
     super.key,
     required this.title,
     required this.message,
+    this.actions = const [],
     this.onActionPressed,
     this.actionLabel,
     this.icon,
@@ -36,6 +37,7 @@ class AppEmptyState extends StatelessWidget {
 
   final String title;
   final String message;
+  final List<Widget> actions;
   final VoidCallback? onActionPressed;
   final String? actionLabel;
   final IconData? icon;
@@ -68,7 +70,15 @@ class AppEmptyState extends StatelessWidget {
                       ?.copyWith(color: colorScheme.onSurfaceVariant),
                   textAlign: TextAlign.center,
                 ),
-                if (onActionPressed != null && actionLabel != null) ...[
+                if (actions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: actions,
+                  ),
+                ] else if (onActionPressed != null && actionLabel != null) ...[
                   const SizedBox(height: 12),
                   FilledButton(
                     onPressed: onActionPressed,

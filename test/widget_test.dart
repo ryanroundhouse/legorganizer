@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -311,6 +310,130 @@ void main() {
 
     expect(savedPieces, isNotNull);
     expect(savedPieces, isEmpty);
+    expect(find.text('No pieces yet'), findsOneWidget);
+    expect(find.text('Import'), findsOneWidget);
+    expect(find.text('Add'), findsOneWidget);
+  });
+
+  testWidgets('empty home state exposes import and add actions', (
+    WidgetTester tester,
+  ) async {
+    var didRequestAdd = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [],
+          onAddRequested: () {
+            didRequestAdd = true;
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('No pieces yet'), findsOneWidget);
+    expect(find.text('Import'), findsOneWidget);
+    expect(find.text('Add'), findsOneWidget);
+    expect(find.text('Retry'), findsNothing);
+
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+
+    expect(didRequestAdd, isTrue);
+  });
+
+  testWidgets('hamburger menu opens options screen with collection actions', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [
+            LegoPiece(
+              name: 'Test Part',
+              bin: 'Bin 99',
+              legoId: '99999',
+              present: true,
+              imageAsset: 'assets/pieces/99999.png',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Options'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Options'), findsOneWidget);
+    expect(find.text('Import collection'), findsOneWidget);
+    expect(find.text('Export collection'), findsOneWidget);
+    expect(find.text('Clear collection'), findsWidgets);
+  });
+
+  testWidgets('clear collection requires confirmation and deletes all pieces', (
+    WidgetTester tester,
+  ) async {
+    List<LegoPiece>? savedPieces;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [
+            LegoPiece(
+              name: 'Brick A',
+              bin: 'Bin 1',
+              legoId: '11111',
+              present: true,
+              imageAsset: 'assets/pieces/11111.png',
+            ),
+            LegoPiece(
+              name: 'Brick B',
+              bin: 'Bin 2',
+              legoId: '22222',
+              present: true,
+              imageAsset: 'assets/pieces/22222.png',
+            ),
+          ],
+          piecesSaver: (pieces) async {
+            savedPieces = pieces;
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Options'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Clear collection').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Clear collection?'), findsOneWidget);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(savedPieces, isNull);
+
+    await tester.tap(find.text('Clear collection').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Clear collection'));
+    await tester.pumpAndSettle();
+
+    expect(savedPieces, isEmpty);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
     expect(find.text('No pieces yet'), findsOneWidget);
   });
 
