@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lego_bin/main.dart';
 import 'package:lego_bin/ui/design_tokens.dart';
@@ -40,6 +41,58 @@ class _TestAssetBundle extends CachingAssetBundle {
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  test('donation prompt waits 30 days, then repeats every 30 days', () async {
+    final controller = DonationPromptController();
+    final prefs = await SharedPreferences.getInstance();
+    final installDate = DateTime(2026, 1, 1);
+
+    expect(
+      await controller.shouldShowPrompt(now: installDate, prefs: prefs),
+      isFalse,
+    );
+
+    expect(
+      await controller.shouldShowPrompt(
+        now: installDate.add(const Duration(days: 29)),
+        prefs: prefs,
+      ),
+      isFalse,
+    );
+
+    expect(
+      await controller.shouldShowPrompt(
+        now: installDate.add(const Duration(days: 30)),
+        prefs: prefs,
+      ),
+      isTrue,
+    );
+
+    await controller.markPromptShown(
+      now: installDate.add(const Duration(days: 30)),
+      prefs: prefs,
+    );
+
+    expect(
+      await controller.shouldShowPrompt(
+        now: installDate.add(const Duration(days: 59)),
+        prefs: prefs,
+      ),
+      isFalse,
+    );
+
+    expect(
+      await controller.shouldShowPrompt(
+        now: installDate.add(const Duration(days: 60)),
+        prefs: prefs,
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets('shows LEGO pieces from provided loader', (
     WidgetTester tester,
   ) async {
@@ -376,6 +429,72 @@ void main() {
     expect(find.text('Clear collection'), findsWidgets);
   });
 
+  testWidgets('about dialog includes optional donation link', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [
+            LegoPiece(
+              name: 'Test Part',
+              bin: 'Bin 99',
+              legoId: '99999',
+              present: true,
+              imageAsset: 'assets/pieces/99999.png',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('About'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('About Legorganizer'), findsOneWidget);
+    expect(
+      find.textContaining('independent developer building this for fun'),
+      findsOneWidget,
+    );
+    expect(find.text('Support Legorganizer with a donation'), findsOneWidget);
+  });
+
+  testWidgets('donation prompt appears after the first 30 days', (
+    WidgetTester tester,
+  ) async {
+    final now = DateTime.now();
+    SharedPreferences.setMockInitialValues({
+      'donation_install_timestamp_ms':
+          now.subtract(const Duration(days: 31)).millisecondsSinceEpoch,
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PieceGridScreen(
+          piecesLoader: () async => const [
+            LegoPiece(
+              name: 'Test Part',
+              bin: 'Bin 99',
+              legoId: '99999',
+              present: true,
+              imageAsset: 'assets/pieces/99999.png',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enjoying Legorganizer?'), findsOneWidget);
+    expect(find.text('Maybe later'), findsOneWidget);
+    expect(find.text('Donate'), findsOneWidget);
+  });
+
   testWidgets('clear collection requires confirmation and deletes all pieces', (
     WidgetTester tester,
   ) async {
@@ -557,5 +676,4 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsWidgets);
     expect(tester.takeException(), isNull);
   });
-
 }

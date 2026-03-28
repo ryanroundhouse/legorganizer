@@ -247,6 +247,57 @@ class PieceStorage {
   }
 }
 
+class DonationPromptController {
+  static const String _installTimestampKey = 'donation_install_timestamp_ms';
+  static const String _lastPromptTimestampKey =
+      'donation_last_prompt_timestamp_ms';
+  static const _initialDelay = Duration(days: 30);
+  static const _repeatDelay = Duration(days: 30);
+
+  Future<bool> shouldShowPrompt({
+    DateTime? now,
+    SharedPreferences? prefs,
+  }) async {
+    final resolvedNow = now ?? DateTime.now();
+    final resolvedPrefs = prefs ?? await SharedPreferences.getInstance();
+    final installTimestampMs = resolvedPrefs.getInt(_installTimestampKey);
+
+    if (installTimestampMs == null) {
+      await resolvedPrefs.setInt(
+        _installTimestampKey,
+        resolvedNow.millisecondsSinceEpoch,
+      );
+      return false;
+    }
+
+    final installDate = DateTime.fromMillisecondsSinceEpoch(installTimestampMs);
+    if (resolvedNow.difference(installDate) < _initialDelay) {
+      return false;
+    }
+
+    final lastPromptTimestampMs = resolvedPrefs.getInt(_lastPromptTimestampKey);
+    if (lastPromptTimestampMs == null) {
+      return true;
+    }
+
+    final lastPromptDate =
+        DateTime.fromMillisecondsSinceEpoch(lastPromptTimestampMs);
+    return resolvedNow.difference(lastPromptDate) >= _repeatDelay;
+  }
+
+  Future<void> markPromptShown({
+    DateTime? now,
+    SharedPreferences? prefs,
+  }) async {
+    final resolvedNow = now ?? DateTime.now();
+    final resolvedPrefs = prefs ?? await SharedPreferences.getInstance();
+    await resolvedPrefs.setInt(
+      _lastPromptTimestampKey,
+      resolvedNow.millisecondsSinceEpoch,
+    );
+  }
+}
+
 class BrickognizeClient {
   static final Uri _predictUri =
       Uri.parse('https://api.brickognize.com/predict/');
@@ -323,12 +374,16 @@ class BrickognizeClient {
 }
 
 class _PieceGridScreenState extends State<PieceGridScreen> {
+  static const _donationUrl =
+      'https://donate.stripe.com/7sYaEYd18b2V7iz0tkdnW00';
   String _searchQuery = '';
   String? _selectedPartCatId;
   String? _selectedBox;
   late Future<List<LegoPiece>> _piecesFuture;
   final ImagePicker _imagePicker = ImagePicker();
   final ScrollController _gridScrollController = ScrollController();
+  final DonationPromptController _donationPromptController =
+      DonationPromptController();
   bool _cameraLookupLoading = false;
   List<LegoPiece> _latestPieces = const [];
   double _lastGridWidth = 0;
@@ -767,12 +822,62 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                 url: 'https://brickognize.com/',
                 onOpen: _openAboutLink,
               ),
+              const SizedBox(height: 16),
+              const Text(
+                'If Legorganizer has been helpful, donations are welcome but '
+                'completely optional. I am an independent developer building '
+                'this for fun, and support helps cover server hosting costs.',
+              ),
+              _AboutLink(
+                label: 'Support Legorganizer with a donation',
+                url: _donationUrl,
+                onOpen: _openAboutLink,
+              ),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _maybeShowDonationPrompt() async {
+    final shouldShow = await _donationPromptController.shouldShowPrompt();
+    if (!shouldShow || !mounted) {
+      return;
+    }
+
+    await _donationPromptController.markPromptShown();
+    if (!mounted) {
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Enjoying Legorganizer?'),
+          content: const Text(
+            'If the app has been useful, an optional donation would be '
+            'appreciated. I am an independent developer building this for fun, '
+            'and donations help cover the server hosting costs behind it.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Maybe later'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _openAboutLink(_donationUrl);
+              },
+              child: const Text('Donate'),
             ),
           ],
         );
@@ -972,6 +1077,9 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   void initState() {
     super.initState();
     _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_maybeShowDonationPrompt());
+    });
   }
 
   void refreshPieces() {
@@ -2138,8 +2246,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         _foundPart = PartRecord(
           partNum: legoId,
           name: existingPiece.name,
-          partCatId:
-              existingCatalogPart?.partCatId ?? existingPiece.partCatId,
+          partCatId: existingCatalogPart?.partCatId ?? existingPiece.partCatId,
           partMaterial: existingCatalogPart?.partMaterial ?? '',
         );
         _setStatus(
@@ -2583,8 +2690,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                                               color: const Color(0xFFFDFDFF),
                                               borderRadius: AppRadius.image,
                                               border: Border.all(
-                                                color:
-                                                    const Color(0xFFF0F0F4),
+                                                color: const Color(0xFFF0F0F4),
                                               ),
                                             ),
                                             child: Stack(
@@ -2593,34 +2699,34 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                                                   child: Padding(
                                                     padding:
                                                         const EdgeInsets.all(
-                                                          14,
-                                                        ),
+                                                      14,
+                                                    ),
                                                     child: ClipRRect(
                                                       borderRadius:
                                                           AppRadius.image,
                                                       child: Image.asset(
                                                         imageAsset,
                                                         fit: BoxFit.contain,
-                                                        errorBuilder:
-                                                            (_, __, ___) =>
-                                                                const DecoratedBox(
-                                                                  decoration:
-                                                                      BoxDecoration(
-                                                                        color: Color(
-                                                                          0xFFF7F7FA,
-                                                                        ),
-                                                                      ),
-                                                                  child: Center(
-                                                                    child: Icon(
-                                                                      Icons
-                                                                          .image_not_supported_outlined,
-                                                                      size: 42,
-                                                                      color: Color(
-                                                                        0xFF575761,
-                                                                      ),
-                                                                    ),
-                                                                  ),
-                                                                ),
+                                                        errorBuilder: (_, __,
+                                                                ___) =>
+                                                            const DecoratedBox(
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            color: Color(
+                                                              0xFFF7F7FA,
+                                                            ),
+                                                          ),
+                                                          child: Center(
+                                                            child: Icon(
+                                                              Icons
+                                                                  .image_not_supported_outlined,
+                                                              size: 42,
+                                                              color: Color(
+                                                                0xFF575761,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
                                                       ),
                                                     ),
                                                   ),
@@ -2654,17 +2760,18 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                                                       ),
                                                       child: Padding(
                                                         padding:
-                                                            const EdgeInsets.all(
-                                                              5,
-                                                            ),
+                                                            const EdgeInsets
+                                                                .all(
+                                                          5,
+                                                        ),
                                                         child: FittedBox(
                                                           fit: BoxFit.scaleDown,
                                                           child: Text(
                                                             binNumber,
                                                             style: TextStyle(
                                                               color: Theme.of(
-                                                                    context,
-                                                                  )
+                                                                context,
+                                                              )
                                                                   .colorScheme
                                                                   .onError,
                                                               fontSize: 20,
