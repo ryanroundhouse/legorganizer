@@ -69,6 +69,9 @@ flutter:
     - assets/pieces/
     - assets/data/pieces.json
     - assets/data/parts.csv
+    - assets/data/part_categories.json
+    - assets/data/design_to_variants.json
+    - assets/data/part_aliases.json
     - assets/splash.png
     - legorganizer logo.png
 

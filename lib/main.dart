@@ -12,9 +12,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'catalog.dart';
 import 'export_downloader.dart';
 import 'ui/app_theme.dart';
 import 'ui/design_tokens.dart';
+import 'ui/part_thumbnail.dart';
 import 'ui/state_widgets.dart';
 
 void main() {
@@ -390,87 +392,25 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
 
   static const _optionsMenuAction = 'options';
   static const _aboutMenuAction = 'about';
-  static const Map<String, String> _customCategoryNames = {
-    '1': 'Baseplates',
-    '11': 'brick',
-    '13': 'Minifigs',
-    '14': 'plate',
-    '16': 'Windows and Doors',
-    '17': 'Gear Parts',
-    '19': 'tile',
-    '22': 'Pneumatics',
-    '23': 'Panels',
-    '24': 'Other',
-    '26': 'Technic Special',
-    '28': 'Animals / Creatures',
-    '29': 'Wheels and Tyres',
-    '30': 'Tubes and Hoses',
-    '31': 'String, Bands and Reels',
-    '33': 'Rock',
-    '34': 'Supports, Girders and Cranes',
-    '35': 'Transportation - Sea and Air',
-    '38': 'Flags, Banners and Signs',
-    '39': 'Magnets and Holders',
-    '40': 'Technic Panels',
-    '41': 'Large Buildable Figures',
-    '42': 'Belville, Scala and Fabuland',
-    '43': 'Znap',
-    '44': 'Mechanical',
-    '45': 'Electronics',
-    '47': 'Windscreens and Fuselage',
-    '48': 'Clikits',
-    '49': 'Plates Angled',
-    '50': 'HO Scale',
-    '51': 'Technic Beams',
-    '52': 'Technic Gears',
-    '55': 'Technic Beams Special',
-    '56': 'Tools',
-    '57': 'Non-Buildable Figures (Duplo, Fabuland, etc)',
-    '58': 'Stickers',
-    '59': 'Minifig Heads',
-    '60': 'Minifig Upper Body',
-    '61': 'Minifig Lower Body',
-    '62': 'Minidoll Heads',
-    '63': 'Minidoll Upper Body',
-    '64': 'Minidoll Lower Body',
-    '65': 'Minifig Headwear',
-    '66': 'Modulex',
-    '69': 'Energy Effects',
-    '70': 'Minifig Hipwear',
-    '71': 'Minifig Neckwear',
-    '72': 'Minifig Headwear Accessories',
-    '74': 'Animal / Creature Accessories',
-    '75': 'Animal / Creature Body Parts',
-    '76': 'Plants & Trees',
-    '77': 'Non-System Parts',
-    '78': 'Pen & Watch',
+
+  // UI-friendly overrides for category labels. Anything not listed here falls
+  // through to the Rebrickable name in part_categories.json.
+  static const Map<String, String> _categoryLabelOverrides = {
     '3': 'slope',
-    '4': 'Duplo, Quatro and Primo',
-    '8': 'technic brick',
     '5': 'stud brick',
-    '7': 'Containers',
+    '8': 'technic brick',
     '9': 'jumper plate',
-    '6': 'Bricks Wedged',
-    '12': 'Technic Connectors',
-    '15': 'Tiles Special',
-    '18': 'Hinges, Arms and Turntables',
-    '20': 'Bricks Round and Cones',
-    '21': 'Plates Round Curved and Dishes',
-    '25': 'Technic Steering, Suspension and Engine',
-    '27': 'Minifig Accessories',
-    '32': 'Bars, Ladders and Fences',
-    '36': 'Transportation - Land',
-    '37': 'Bricks Curved',
-    '46': 'Technic Axles',
-    '53': 'Technic Pins',
-    '54': 'Technic Bushes',
-    '67': 'Tiles Round and Curved',
-    '68': 'Projectiles / Launchers',
-    '73': 'Minifig Shields, Weapons, & Tools',
+    '11': 'brick',
+    '14': 'plate',
+    '19': 'tile',
   };
 
+  PartsCatalog? _catalog;
+
   String _categoryLabel(String partCatId) =>
-      _customCategoryNames[partCatId] ?? partCatId;
+      _categoryLabelOverrides[partCatId] ??
+      _catalog?.categoryNames[partCatId] ??
+      partCatId;
 
   List<String> _categoryOptions(List<LegoPiece> pieces) {
     final categories = pieces
@@ -1077,6 +1017,10 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   void initState() {
     super.initState();
     _piecesFuture = widget.piecesLoader?.call() ?? _loadPieces();
+    unawaited(PartsCatalog.load().then((catalog) {
+      if (!mounted) return;
+      setState(() => _catalog = catalog);
+    }));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_maybeShowDonationPrompt());
     });
@@ -1585,6 +1529,76 @@ class _InlineStatusData {
   final StatusTone tone;
 }
 
+class _VariantPickerPanel extends StatelessWidget {
+  const _VariantPickerPanel({
+    required this.sourceLegoId,
+    required this.variants,
+    required this.onSelect,
+  });
+
+  final String sourceLegoId;
+  final List<PartRecord> variants;
+  final ValueChanged<PartRecord> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final heading = sourceLegoId.isEmpty
+        ? 'Pick a variant'
+        : 'Pick a variant of $sourceLegoId';
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F4FB),
+        borderRadius: AppRadius.card,
+        border: Border.all(color: const Color(0xFFE3DCF2)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(heading, style: theme.textTheme.titleSmall),
+          ),
+          for (final variant in variants)
+            InkWell(
+              onTap: () => onSelect(variant),
+              borderRadius: AppRadius.card,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            variant.partNum,
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (variant.name.isNotEmpty)
+                            Text(
+                              variant.name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, size: 20),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class OptionsScreen extends StatelessWidget {
   const OptionsScreen({
     super.key,
@@ -1971,10 +1985,11 @@ class PieceTile extends StatelessWidget {
                             padding: const EdgeInsets.all(14),
                             child: ClipRRect(
                               borderRadius: AppRadius.image,
-                              child: Image.asset(
-                                piece.imageAsset,
+                              child: PartThumbnail(
+                                assetPath: piece.imageAsset,
+                                partNum: piece.legoId,
                                 fit: BoxFit.contain,
-                                errorBuilder: (_, __, ___) => DecoratedBox(
+                                fallback: DecoratedBox(
                                   decoration: const BoxDecoration(
                                     color: Color(0xFFF7F7FA),
                                   ),
@@ -2116,17 +2131,42 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
   static const String _partsPath = 'assets/data/parts.csv';
   static const String _unknownBinLabel = 'Unknown Bin';
 
+  static const Duration _lookupDebounce = Duration(milliseconds: 400);
+
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _binController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
+  Timer? _lookupTimer;
   bool _loading = true;
   bool _cameraLookupLoading = false;
   List<LegoPiece> _pieces = const [];
   List<PartRecord> _parts = const [];
   Map<String, PartRecord> _partsByLookupKey = const {};
   Map<String, String> _pieceNamesById = const {};
+  PartsCatalog? _catalog;
   PartRecord? _foundPart;
+  List<PartRecord> _pendingVariants = const [];
+  String _pendingVariantsForId = '';
   _InlineStatusData? _status;
+
+  void _scheduleLookup() {
+    _lookupTimer?.cancel();
+    if (_pendingVariants.isNotEmpty) {
+      setState(() {
+        _pendingVariants = const [];
+        _pendingVariantsForId = '';
+      });
+    }
+    _lookupTimer = Timer(_lookupDebounce, () {
+      if (!mounted) return;
+      _lookup();
+    });
+  }
+
+  void _lookupNow() {
+    _lookupTimer?.cancel();
+    _lookup();
+  }
 
   void _setStatus(String message, StatusTone tone) {
     _status = _InlineStatusData(message: message, tone: tone);
@@ -2147,7 +2187,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     _controller.selection = TextSelection.collapsed(
       offset: _controller.text.length,
     );
-    _lookup();
+    _lookupNow();
   }
 
   Future<void> refreshInventory() async {
@@ -2166,14 +2206,18 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
   }
 
   void resetForm() {
+    _lookupTimer?.cancel();
     _controller.clear();
     _binController.clear();
     _foundPart = null;
+    _pendingVariants = const [];
+    _pendingVariantsForId = '';
     _status = null;
   }
 
   @override
   void dispose() {
+    _lookupTimer?.cancel();
     _controller.dispose();
     _binController.dispose();
     super.dispose();
@@ -2184,6 +2228,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
       final csvText = await rootBundle.loadString(_partsPath);
       final pieces = await PieceStorage.loadPieces();
       final pieceNames = _buildPieceNameMap(pieces);
+      final catalog = await PartsCatalog.load();
 
       if (!mounted) {
         return;
@@ -2193,6 +2238,7 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
         _parts = _parsePartsCsv(csvText);
         _partsByLookupKey = _buildPartLookup(_parts);
         _pieceNamesById = pieceNames;
+        _catalog = catalog;
         _loading = false;
       });
     } catch (error) {
@@ -2228,6 +2274,8 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     if (legoId.isEmpty) {
       setState(() {
         _foundPart = null;
+        _pendingVariants = const [];
+        _pendingVariantsForId = '';
         _status = null;
       });
       return;
@@ -2249,6 +2297,8 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
           partCatId: existingCatalogPart?.partCatId ?? existingPiece.partCatId,
           partMaterial: existingCatalogPart?.partMaterial ?? '',
         );
+        _pendingVariants = const [];
+        _pendingVariantsForId = '';
         _setStatus(
           'Part $legoId is already in your inventory. You can update its bin below.',
           StatusTone.warning,
@@ -2258,13 +2308,72 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
     }
 
     final found = _findPartByLegoId(legoId);
-    setState(() {
-      _foundPart = found;
-      if (found == null) {
-        _setStatus('No part found for LEGO ID "$legoId".', StatusTone.warning);
-      } else {
+    if (found != null) {
+      setState(() {
+        _foundPart = found;
+        _pendingVariants = const [];
+        _pendingVariantsForId = '';
         _status = null;
+      });
+      return;
+    }
+
+    final variantIds = _catalog?.variantsFor(legoId) ?? const <String>[];
+    final variantRecords = <PartRecord>[];
+    for (final id in variantIds) {
+      final record = _findPartByLegoId(id);
+      if (record != null) {
+        variantRecords.add(record);
       }
+    }
+
+    if (variantRecords.length == 1) {
+      final resolved = variantRecords.single;
+      setState(() {
+        _foundPart = resolved;
+        _pendingVariants = const [];
+        _pendingVariantsForId = '';
+        _setStatus(
+          'No exact match for "$legoId" — using mold variant ${resolved.partNum}.',
+          StatusTone.warning,
+        );
+      });
+      return;
+    }
+
+    if (variantRecords.length > 1) {
+      setState(() {
+        _foundPart = null;
+        _pendingVariants = variantRecords;
+        _pendingVariantsForId = legoId;
+        _setStatus(
+          '"$legoId" has been remolded — pick the variant that matches your part.',
+          StatusTone.warning,
+        );
+      });
+      return;
+    }
+
+    setState(() {
+      _foundPart = null;
+      _pendingVariants = const [];
+      _pendingVariantsForId = '';
+      _setStatus('No part found for LEGO ID "$legoId".', StatusTone.warning);
+    });
+  }
+
+  void _selectVariant(PartRecord variant) {
+    final sourceId = _pendingVariantsForId;
+    setState(() {
+      _foundPart = variant;
+      _pendingVariants = const [];
+      _pendingVariantsForId = '';
+      _setStatus(
+        sourceId.isEmpty
+            ? 'Using mold variant ${variant.partNum}.'
+            : 'Using mold variant ${variant.partNum} for "$sourceId".',
+        StatusTone.warning,
+      );
     });
   }
 
@@ -2612,9 +2721,17 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                               hintText: 'Example: 3001',
                             ),
                             textInputAction: TextInputAction.search,
-                            onChanged: (_) => _lookup(),
-                            onSubmitted: (_) => _lookup(),
+                            onChanged: (_) => _scheduleLookup(),
+                            onSubmitted: (_) => _lookupNow(),
                           ),
+                          if (_pendingVariants.isNotEmpty) ...[
+                            const SizedBox(height: AppSpacing.xs),
+                            _VariantPickerPanel(
+                              sourceLegoId: _pendingVariantsForId,
+                              variants: _pendingVariants,
+                              onSelect: _selectVariant,
+                            ),
+                          ],
                           const SizedBox(height: AppSpacing.sm),
                           FilledButton.icon(
                             onPressed: _cameraLookupLoading
@@ -2704,11 +2821,12 @@ class _AddPieceScreenState extends State<AddPieceScreen> {
                                                     child: ClipRRect(
                                                       borderRadius:
                                                           AppRadius.image,
-                                                      child: Image.asset(
-                                                        imageAsset,
+                                                      child: PartThumbnail(
+                                                        assetPath: imageAsset,
+                                                        partNum:
+                                                            foundPart.partNum,
                                                         fit: BoxFit.contain,
-                                                        errorBuilder: (_, __,
-                                                                ___) =>
+                                                        fallback:
                                                             const DecoratedBox(
                                                           decoration:
                                                               BoxDecoration(

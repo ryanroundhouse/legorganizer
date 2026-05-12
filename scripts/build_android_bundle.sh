@@ -80,6 +80,7 @@ mv "${TMP_FILE}" "${PUBSPEC_FILE}"
 echo "Version bumped: ${OLD_VERSION} -> ${NEW_VERSION}"
 
 cd "${ROOT_DIR}"
+bash "${ROOT_DIR}/scripts/refresh_catalog.sh"
 flutter pub get
 flutter build appbundle --release
 
