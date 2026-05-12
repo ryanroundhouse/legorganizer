@@ -86,3 +86,4 @@ flutter build appbundle --release
 
 echo "Android App Bundle created:"
 echo "${ROOT_DIR}/build/app/outputs/bundle/release/app-release.aab"
+echo "Folder: ${ROOT_DIR}/build/app/outputs/bundle/release"
