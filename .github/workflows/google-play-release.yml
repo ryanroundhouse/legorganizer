@@ -1,11 +1,13 @@
 name: Google Play release
-run-name: Internal Play ${{ inputs.expected_version }}
+run-name: Internal Play ${{ github.event_name }} run ${{ github.run_number }}
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      expected_version:
-        description: 'Exact committed pubspec version (for example 1.0.19+20); never auto-bumped'
+      expected_version_name:
+        description: 'Confirm the committed version name (for example 1.0.20); build number is automatic'
         type: string
         required: true
 
@@ -16,6 +18,7 @@ permissions:
 concurrency:
   group: google-play-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   preflight:
@@ -31,11 +34,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Verify app, version and main branch
+      - name: Verify app and main branch; assign stable build number
         id: check
         env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          EXPECTED_VERSION_NAME: ${{ inputs.expected_version_name }}
         run: python3 scripts/ci/release_support.py preflight
 
   validate:
@@ -88,14 +90,19 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           PLAY_UPLOAD_CERTIFICATE_SHA256: ${{ vars.PLAY_UPLOAD_CERTIFICATE_SHA256 }}
         run: python3 scripts/ci/android_signing.py
-      - name: Build signed AAB without changing version or catalog
+      - name: Build signed AAB without changing source version or catalog
+        env:
+          VERSION_NAME: ${{ needs.preflight.outputs.version_name }}
+          VERSION_CODE: ${{ needs.preflight.outputs.version_code }}
         run: |
-          flutter build appbundle --release --no-pub
+          flutter build appbundle --release --no-pub --build-name "$VERSION_NAME" --build-number "$VERSION_CODE"
           jarsigner -verify build/app/outputs/bundle/release/app-release.aab > "$RUNNER_TEMP/aab-verification.txt"
           grep -F 'jar verified.' "$RUNNER_TEMP/aab-verification.txt"
           git diff --exit-code -- pubspec.yaml pubspec.lock assets
       - name: Record candidate identity
         id: manifest
+        env:
+          VERSION_CODE: ${{ needs.preflight.outputs.version_code }}
         run: python3 scripts/ci/release_support.py manifest
       - name: Preserve only the signed bundle and public release manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -126,4 +133,3 @@ jobs:
       - name: Remove runner signing files
         if: always()
         run: rm -f android/key.properties "$RUNNER_TEMP/legorganizer-upload.jks"
-

@@ -14,6 +14,11 @@ import urllib.request
 PACKAGE = "com.gencorp.legorganizer"
 REPOSITORY = "ryanroundhouse/legorganizer"
 PRODUCTION_ENVIRONMENT = "google-play-production"
+MAX_VERSION_CODE = 2100000000
+# Deliberately independent of pubspec's local build number and wall-clock time.
+# Never lower this or reset/replace the release workflow without a reviewed migration.
+BUILD_NUMBER_BASE = 1000
+RELEASE_EVENTS = ("push", "workflow_dispatch")
 
 
 def require(condition, message):
@@ -74,7 +79,7 @@ def source_version(root=Path(".")):
     match = re.search(r"^version:\s*(\d+\.\d+\.\d+)\+([1-9]\d*)\s*$",
                       (root / "pubspec.yaml").read_text(), re.MULTILINE)
     require(match, "pubspec.yaml must have version x.y.z+positive_integer")
-    require(int(match[2]) <= 2100000000, "Android version code is too large")
+    require(int(match[2]) <= MAX_VERSION_CODE, "Android version code is too large")
     gradle = (root / "android/app/build.gradle").read_text()
     require(re.findall(r'applicationId\s*=\s*"([^"]+)"', gradle) == [PACKAGE],
             "Unexpected Android application ID")
@@ -87,13 +92,27 @@ def output(values):
             file.write(f"{key}={value}\n")
 
 
-def preflight():
+def automatic_version_code(run_number):
+    require(re.fullmatch(r"[1-9]\d*", str(run_number)), "Invalid workflow run number")
+    code = BUILD_NUMBER_BASE + int(run_number)
+    require(code <= MAX_VERSION_CODE, "Automatic build number exceeds Google Play's limit")
+    return code
+
+
+def release_identity():
     require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY, "Wrong repository")
     require(os.environ.get("GITHUB_REF") == "refs/heads/main", "Release only from main")
-    require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "Manual dispatch required")
-    name, code = source_version()
-    require(os.environ.get("EXPECTED_VERSION") == f"{name}+{code}", "Version confirmation does not match pubspec.yaml")
+    require(os.environ.get("GITHUB_EVENT_NAME") in RELEASE_EVENTS, "Only main pushes or manual dispatches may release")
+    name, _ = source_version()
+    return name, automatic_version_code(os.environ["GITHUB_RUN_NUMBER"])
+
+
+def preflight():
+    name, code = release_identity()
+    if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+        require(os.environ.get("EXPECTED_VERSION_NAME") == name, "Version name confirmation does not match pubspec.yaml")
     output({"version_name": name, "version_code": code})
+    print(f"Release candidate: {name}+{code} (build base {BUILD_NUMBER_BASE} + workflow run {os.environ['GITHUB_RUN_NUMBER']})")
 
 
 def source_run():
@@ -105,26 +124,46 @@ def source_run():
     require(re.fullmatch(r"[1-9]\d*", run_id), "Invalid internal workflow run ID")
     run = github(f"actions/runs/{run_id}")
     require(run.get("repository", {}).get("full_name") == REPOSITORY
-            and run.get("head_branch") == "main" and run.get("event") == "workflow_dispatch"
+            and run.get("head_branch") == "main" and run.get("event") in RELEASE_EVENTS
             and run.get("path") == ".github/workflows/google-play-release.yml"
             and run.get("status") == "completed" and run.get("conclusion") == "success",
-            "Source must be a successful manual Google Play release run on this repository's main branch")
+            "Source must be a successful push/manual Google Play release run on this repository's main branch")
     name = f"play-aab-{run_id}-{run['run_attempt']}"
     artifacts = github(f"actions/runs/{run_id}/artifacts?per_page=100").get("artifacts", [])
     matches = [artifact for artifact in artifacts if artifact.get("name") == name and not artifact.get("expired")]
     require(len(matches) == 1, "Exactly one unexpired signed release artifact is required")
     require(re.fullmatch(r"[0-9a-f]{40}", run["head_sha"]), "Invalid source commit")
-    output({"artifact_id": matches[0]["id"], "source_commit": run["head_sha"]})
+    require(type(run.get("run_number")) is int and run["run_number"] > 0
+            and type(run.get("run_attempt")) is int and run["run_attempt"] > 0, "Invalid source run counters")
+    output({"artifact_id": matches[0]["id"], "source_commit": run["head_sha"],
+            "source_event": run["event"], "source_run_number": run["run_number"],
+            "source_run_attempt": run["run_attempt"]})
 
 
-def validate_manifest(candidate, data, expected_version, source_commit, run_id):
+def validate_manifest(candidate, data, expected_version, source_commit, run_id,
+                      source_event, source_run_number, source_run_attempt):
+    require(source_event in RELEASE_EVENTS and type(source_run_number) is int and source_run_number > 0
+            and type(source_run_attempt) is int and source_run_attempt > 0, "Invalid source run metadata")
     require(candidate.get("package_name") == PACKAGE, "Unexpected artifact package")
     code = candidate.get("version_code")
-    require(type(code) is int and 0 < code <= 2100000000, "Invalid artifact version code")
+    require(type(code) is int and 0 < code <= MAX_VERSION_CODE, "Invalid artifact version code")
     require(re.fullmatch(r"\d+\.\d+\.\d+", candidate.get("version_name", "")), "Invalid artifact version name")
     require(expected_version == f"{candidate['version_name']}+{code}", "Version confirmation differs from source artifact")
     require(candidate.get("commit") == source_commit and candidate.get("run_id") == run_id,
             "Artifact provenance differs from the verified source run")
+    if type(candidate.get("schema_version")) is int and candidate["schema_version"] == 2:
+        require(candidate.get("event") == source_event
+                and type(candidate.get("run_number")) is int and type(candidate.get("run_attempt")) is int
+                and candidate.get("run_number") == source_run_number
+                and candidate.get("run_attempt") == source_run_attempt,
+                "Artifact event or run counters differ from the verified source run")
+        require(type(candidate.get("build_number_base")) is int and candidate["build_number_base"] >= 0
+                and code == candidate["build_number_base"] + source_run_number,
+                "Artifact build number does not match its recorded allocation")
+    else:
+        # Preserve the already published pre-automation manual release's artifact.
+        require("schema_version" not in candidate and source_event == "workflow_dispatch",
+                "Automatic sources require a versioned release manifest")
     require(candidate.get("sha256") == hashlib.sha256(data).hexdigest(), "Downloaded AAB checksum mismatch")
     return {"version_code": code, "sha256": candidate["sha256"]}
 
@@ -133,7 +172,9 @@ def verify_artifact():
     folder = Path("release-candidate")
     candidate = json.loads((folder / "release.json").read_text())
     values = validate_manifest(candidate, (folder / "app-release.aab").read_bytes(),
-                               os.environ["EXPECTED_VERSION"], os.environ["SOURCE_COMMIT"], os.environ["INTERNAL_RUN_ID"])
+                               os.environ["EXPECTED_VERSION"], os.environ["SOURCE_COMMIT"], os.environ["INTERNAL_RUN_ID"],
+                               os.environ["SOURCE_EVENT"], int(os.environ["SOURCE_RUN_NUMBER"]),
+                               int(os.environ["SOURCE_RUN_ATTEMPT"]))
     output(values)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
         summary.write(f"## Approval requested: 100% production rollout\n"
@@ -243,11 +284,14 @@ def verify_or_promote(play, code, digest, promote=False):
 
 
 def manifest():
-    name, code = source_version()
+    name, code = release_identity()
+    require(os.environ.get("VERSION_CODE") == str(code), "Build number differs from preflight")
     aab = Path("build/app/outputs/bundle/release/app-release.aab")
     digest = hashlib.sha256(aab.read_bytes()).hexdigest()
-    values = {"package_name": PACKAGE, "version_name": name, "version_code": code,
-              "sha256": digest, "commit": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"]}
+    values = {"schema_version": 2, "package_name": PACKAGE, "version_name": name, "version_code": code,
+              "sha256": digest, "commit": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "run_number": int(os.environ["GITHUB_RUN_NUMBER"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "build_number_base": BUILD_NUMBER_BASE}
     (aab.parent / "release.json").write_text(json.dumps(values, indent=2) + "\n")
     output({"sha256": digest})
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:

@@ -19,6 +19,7 @@ permissions:
 concurrency:
   group: google-play-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   preflight:
@@ -56,6 +57,9 @@ jobs:
           INTERNAL_RUN_ID: ${{ inputs.internal_run_id }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
           SOURCE_COMMIT: ${{ steps.source.outputs.source_commit }}
+          SOURCE_EVENT: ${{ steps.source.outputs.source_event }}
+          SOURCE_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
+          SOURCE_RUN_ATTEMPT: ${{ steps.source.outputs.source_run_attempt }}
         run: python3 scripts/ci/release_support.py verify-artifact
 
   production:

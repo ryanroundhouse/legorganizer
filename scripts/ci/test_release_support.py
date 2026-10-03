@@ -1,6 +1,7 @@
 """Offline tests: these never authenticate, sign, upload, or change GitHub/Play."""
 import copy
 import hashlib
+import json
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -121,7 +122,7 @@ class ReleaseChecksTest(unittest.TestCase):
 
     def test_preflight_rejects_non_main_ref_and_mismatched_version(self):
         environment = {"GITHUB_REPOSITORY": release.REPOSITORY, "GITHUB_REF": "refs/heads/feature",
-                       "GITHUB_EVENT_NAME": "workflow_dispatch", "EXPECTED_VERSION": "1.0.20+21"}
+                       "GITHUB_EVENT_NAME": "workflow_dispatch", "EXPECTED_VERSION_NAME": "1.0.20", "GITHUB_RUN_NUMBER": "2"}
         with patch.dict(os.environ, environment), self.assertRaisesRegex(ValueError, "main"):
             release.preflight()
         environment["GITHUB_REF"] = "refs/heads/main"
@@ -184,27 +185,52 @@ class ReleaseChecksTest(unittest.TestCase):
         data = b"signed candidate"
         candidate = {"package_name": release.PACKAGE, "version_name": "1.0.20", "version_code": 21,
                      "commit": "c" * 40, "run_id": "123", "sha256": hashlib.sha256(data).hexdigest()}
-        self.assertEqual(release.validate_manifest(candidate, data, "1.0.20+21", "c" * 40, "123")["version_code"], 21)
+        self.assertEqual(release.validate_manifest(candidate, data, "1.0.20+21", "c" * 40, "123", "workflow_dispatch", 1, 1)["version_code"], 21)
         for changed in ({"package_name": "other.app"}, {"version_code": 22}, {"commit": "d" * 40},
                         {"run_id": "124"}, {"sha256": "b" * 64}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
-                release.validate_manifest({**candidate, **changed}, data, "1.0.20+21", "c" * 40, "123")
+                release.validate_manifest({**candidate, **changed}, data, "1.0.20+21", "c" * 40, "123", "workflow_dispatch", 1, 1)
 
     def test_source_run_requires_successful_main_release_workflow(self):
         run = {"repository": {"full_name": release.REPOSITORY}, "head_branch": "main", "event": "workflow_dispatch",
                "path": ".github/workflows/google-play-release.yml", "status": "completed", "conclusion": "success",
-               "run_attempt": 1, "head_sha": "c" * 40}
+               "run_attempt": 1, "run_number": 1, "head_sha": "c" * 40}
         artifacts = {"artifacts": [{"id": 99, "name": "play-aab-123-1", "expired": False}]}
         environment = {"GITHUB_REPOSITORY": release.REPOSITORY, "GITHUB_REF": "refs/heads/main",
                        "GITHUB_EVENT_NAME": "workflow_dispatch", "INTERNAL_RUN_ID": "123"}
         with patch.dict(os.environ, environment), patch.object(release, "check_gate"), patch.object(release, "output") as output:
             with patch.object(release, "github", side_effect=[run, artifacts]):
                 release.source_run()
-            output.assert_called_once_with({"artifact_id": 99, "source_commit": "c" * 40})
+            output.assert_called_once_with({"artifact_id": 99, "source_commit": "c" * 40,
+                                           "source_event": "workflow_dispatch", "source_run_number": 1, "source_run_attempt": 1})
             for changed in ({"head_branch": "feature"}, {"event": "pull_request"}, {"conclusion": "failure"},
                             {"path": ".github/workflows/other.yml"}, {"repository": {"full_name": "other/repo"}}):
                 with self.subTest(changed=changed), patch.object(release, "github", return_value={**run, **changed}), self.assertRaises(ValueError):
                     release.source_run()
+
+    def test_push_source_uses_latest_attempt_and_exact_run_counters(self):
+        run = {"repository": {"full_name": release.REPOSITORY}, "head_branch": "main", "event": "push",
+               "path": ".github/workflows/google-play-release.yml", "status": "completed", "conclusion": "success",
+               "run_attempt": 4, "run_number": 2, "head_sha": "c" * 40}
+        artifacts = {"artifacts": [{"id": 98, "name": "play-aab-123-3", "expired": False},
+                                  {"id": 99, "name": "play-aab-123-4", "expired": False}]}
+        environment = {"GITHUB_REPOSITORY": release.REPOSITORY, "GITHUB_REF": "refs/heads/main",
+                       "GITHUB_EVENT_NAME": "workflow_dispatch", "INTERNAL_RUN_ID": "123"}
+        with patch.dict(os.environ, environment), patch.object(release, "check_gate"), patch.object(release, "output") as output:
+            with patch.object(release, "github", side_effect=[run, artifacts]):
+                release.source_run()
+            output.assert_called_once_with({"artifact_id": 99, "source_commit": "c" * 40,
+                                           "source_event": "push", "source_run_number": 2, "source_run_attempt": 4})
+            for changed in ({"run_number": True}, {"run_number": 0}, {"run_attempt": 0}):
+                with self.subTest(changed=changed), patch.object(release, "github", side_effect=[{**run, **changed}, artifacts]), self.assertRaises(ValueError):
+                    release.source_run()
+
+    def test_push_cannot_start_production_promotion(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": release.REPOSITORY, "GITHUB_REF": "refs/heads/main",
+                                    "GITHUB_EVENT_NAME": "push"}), patch.object(release, "check_gate") as gate:
+            with self.assertRaisesRegex(ValueError, "Manual dispatch"):
+                release.source_run()
+            gate.assert_not_called()
 
     def test_upload_response_mismatch_never_updates_track_or_commits(self):
         data = b"signed candidate"
@@ -244,6 +270,107 @@ class ReleaseChecksTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Version code"):
                 release.upload_internal(FakePlay(), 21, hashlib.sha256(data).hexdigest())
             upload.assert_not_called()
+
+    def test_older_candidate_replaced_on_internal_cannot_promote(self):
+        newer = copy.deepcopy(self.internal)
+        newer["releases"][0]["versionCodes"] = ["22"]
+        calls = []
+        bundles = self.bundles
+
+        class FakePlay:
+            @contextmanager
+            def edit(self):
+                yield "edit"
+
+            def call(self, path, method="GET", payload=None):
+                calls.append(method)
+                return newer if path.endswith("/tracks/internal") else {"bundles": bundles}
+
+        with self.assertRaisesRegex(ValueError, "completed internal-testing"):
+            release.verify_or_promote(FakePlay(), 21, self.digest, promote=True)
+        self.assertEqual(calls, ["GET", "GET"])
+
+
+class AutomaticNumberingTest(unittest.TestCase):
+    def setUp(self):
+        self.environment = {"GITHUB_REPOSITORY": release.REPOSITORY, "GITHUB_REF": "refs/heads/main",
+                            "GITHUB_EVENT_NAME": "push", "GITHUB_RUN_NUMBER": "2", "GITHUB_RUN_ATTEMPT": "1",
+                            "GITHUB_RUN_ID": "123", "GITHUB_SHA": "c" * 40, "VERSION_CODE": "1002"}
+        self.data = b"signed automatic candidate"
+        self.candidate = {"schema_version": 2, "package_name": release.PACKAGE, "version_name": "1.0.20",
+                          "version_code": 1002, "commit": "c" * 40, "run_id": "123", "event": "push",
+                          "run_number": 2, "run_attempt": 1, "build_number_base": 1000,
+                          "sha256": hashlib.sha256(self.data).hexdigest()}
+
+    def validate(self, candidate=None, **changes):
+        return release.validate_manifest(candidate or {**self.candidate, **changes}, self.data,
+                                         "1.0.20+1002", "c" * 40, "123", "push", 2, 1)
+
+    def test_new_runs_increase_and_retries_keep_same_number(self):
+        self.assertEqual(release.automatic_version_code("2"), 1002)
+        self.assertEqual(release.automatic_version_code("3"), 1003)
+        for attempt in ("1", "2", "4"):
+            with patch.dict(os.environ, {**self.environment, "GITHUB_RUN_ATTEMPT": attempt}), patch.object(
+                    release, "source_version", return_value=("1.0.20", 21)):
+                self.assertEqual(release.release_identity(), ("1.0.20", 1002))
+
+    def test_invalid_and_overflow_run_numbers_rejected(self):
+        for number in ("", "0", "-1", "1.5", "02", "2\n", " 2", True, None, "2100000000"):
+            with self.subTest(number=number), self.assertRaises(ValueError):
+                release.automatic_version_code(number)
+        self.assertEqual(release.automatic_version_code(str(release.MAX_VERSION_CODE - release.BUILD_NUMBER_BASE)),
+                         release.MAX_VERSION_CODE)
+
+    def test_push_preflight_needs_no_manual_input(self):
+        with patch.dict(os.environ, self.environment), patch.object(release, "source_version", return_value=("1.0.20", 21)), patch.object(
+                release, "output") as output:
+            release.preflight()
+            output.assert_called_once_with({"version_name": "1.0.20", "version_code": 1002})
+
+    def test_manual_preflight_confirms_name_but_automates_number(self):
+        with patch.dict(os.environ, {**self.environment, "GITHUB_EVENT_NAME": "workflow_dispatch",
+                                    "EXPECTED_VERSION_NAME": "1.0.20"}), patch.object(
+                release, "source_version", return_value=("1.0.20", 21)), patch.object(release, "output") as output:
+            release.preflight()
+            output.assert_called_once_with({"version_name": "1.0.20", "version_code": 1002})
+
+    def test_other_events_refs_and_repositories_cannot_release(self):
+        for changed in ({"GITHUB_EVENT_NAME": "pull_request"}, {"GITHUB_EVENT_NAME": "pull_request_target"},
+                        {"GITHUB_EVENT_NAME": "workflow_run"}, {"GITHUB_REF": "refs/heads/feature"},
+                        {"GITHUB_REF": "refs/tags/main"}, {"GITHUB_REPOSITORY": "other/legorganizer"}):
+            with self.subTest(changed=changed), patch.dict(os.environ, {**self.environment, **changed}), self.assertRaises(ValueError):
+                release.preflight()
+
+    def test_manifest_records_effective_version_and_attempt(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {
+                **self.environment, "GITHUB_STEP_SUMMARY": str(Path(folder) / "summary")}), patch.object(
+                release, "source_version", return_value=("1.0.20", 21)), patch.object(Path, "read_bytes", return_value=self.data), patch.object(
+                Path, "write_text") as write, patch.object(release, "output"):
+            release.manifest()
+            self.assertEqual(json.loads(write.call_args.args[0]), self.candidate)
+            self.assertIn("1.0.20+1002", (Path(folder) / "summary").read_text())
+
+    def test_manifest_rejects_changed_preflight_number(self):
+        with patch.dict(os.environ, {**self.environment, "VERSION_CODE": "21"}), patch.object(
+                release, "source_version", return_value=("1.0.20", 21)), self.assertRaisesRegex(ValueError, "preflight"):
+            release.manifest()
+
+    def test_automatic_manifest_checks_effective_version(self):
+        self.assertEqual(self.validate()["version_code"], 1002)
+        for changed in ({"version_code": 21}, {"run_number": 3}, {"run_number": True}, {"run_attempt": 2},
+                        {"event": "workflow_dispatch"}, {"build_number_base": 999}, {"build_number_base": True},
+                        {"schema_version": 3}, {"schema_version": 2.0}):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                self.validate(**changed)
+
+    def test_push_source_cannot_use_legacy_manifest(self):
+        legacy = {key: value for key, value in self.candidate.items() if key != "schema_version"}
+        with self.assertRaisesRegex(ValueError, "versioned release manifest"):
+            self.validate(legacy)
+
+    def test_current_base_change_does_not_rewrite_old_candidate(self):
+        with patch.object(release, "BUILD_NUMBER_BASE", 2000):
+            self.assertEqual(self.validate()["version_code"], 1002)
 
 
 if __name__ == "__main__":

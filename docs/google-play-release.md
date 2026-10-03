@@ -1,12 +1,14 @@
 # Google Play release pipeline
 
-This pipeline is **inactive for releases until the owner completes the setup below**.
-Adding or merging it does not publish anything. No app version is changed automatically.
+**Enabling this workflow by merging it to `main` starts an internal release of that merge commit immediately once signing and WIF trust are ready.** Opening a PR alone does not enable push releases. Complete the owner checks and trust migration below before the enabling merge.
+
+**Keep unrelated pending Play Console changes clear and coordinate publishing before every main push or manual release.** An automatic API edit commit can submit other pending Console changes. `ERROR_IF_IN_REVIEW` protects an active review, but does not protect unrelated changes that have not been submitted. Do not edit Console or use another publisher during a release. See [Google's Console/API concurrency guidance](https://developers.google.com/android-publisher/concurrency-considerations).
 
 ## What runs
 
-- **Flutter CI** on pull requests and pushes to `main`: locked dependency install, release-helper unit tests, `flutter analyze --no-fatal-infos`, all Flutter tests, and a debug Android App Bundle build without release credentials
-- **Google Play release**, manually dispatched on `main`: the same checks, signed release AAB, upload to **internal testing**, and a verified release artifact
+- **Flutter CI** on pull requests and pushes to `main`: locked dependency install, release-helper unit tests, `flutter analyze --no-fatal-infos`, all Flutter tests, and a debug Android App Bundle build without release credentials. The throwaway debug version `0.0.0+1001` exercises Flutter's version overrides; it is not uploaded or a release candidate
+- **Google Play release** on every push/merge to `main`: the same checks, a signed release AAB with an automatic build number, upload to **internal testing**, and a verified release artifact. Each push builds its head commit; local commits, other branches, PRs and tags do not publish
+- **Google Play release** also remains manually dispatchable on `main`, with `expected_version_name` confirming the committed marketing version, such as `1.0.20`. Its build number is automatic too
 - **Promote Google Play release**, separately dispatched on `main`: verify a successful internal run and its signed artifact, then wait for manual production approval
 - Production promotes the exact internal version and SHA-256 recorded by that run, without rebuilding or uploading again. Approval authorizes a **100% production rollout**, not a staged rollout
 
@@ -14,7 +16,15 @@ Flutter is pinned to **3.41.9** (Dart 3.11.5), matching the checked-in framework
 
 The analyzer fails on errors and warnings. Existing `dart:html` and `Radio` deprecation infos remain visible without blocking this pipeline-only change; their migration is separate app work.
 
-The workflow uses the version already committed in `pubspec.yaml`. It deliberately does not invoke `scripts/build_android_bundle.sh`, which increments versions and refreshes catalog assets.
+## Automatic build numbers
+
+The marketing version comes from `pubspec.yaml`; its checked-in value remains `1.0.20+21`. Release builds override only the effective Android build number with **`BUILD_NUMBER_BASE + github.run_number`**, where the reviewed Python constant `BUILD_NUMBER_BASE` is **1000**. Flutter receives `--build-name` with the committed version name and `--build-number` with the calculated code. The workflow does not edit `pubspec.yaml`, commit version bumps, refresh assets or invoke `scripts/build_android_bundle.sh`.
+
+At migration preparation, the existing release workflow counter was `1`, so its next new run would normally use code `1002` and version `1.0.20+1002`. Additional runs can change that example; use the actual run summary. GitHub increments `run_number` for each new run of this workflow and keeps it unchanged on reruns; only `run_attempt` changes on a rerun. Failed or cancelled runs therefore leave normal gaps, and rerunning an old run never allocates a new code. See [GitHub run counters](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context).
+
+The helper rejects calculated codes above **2100000000**. Before uploading, it checks visible Play tracks, bundles and APKs and refuses a reused, stale or out-of-order code. Google Play remains the authority for historical reuse. It never substitutes `max + 1` or retries with a different code. If another publisher overtakes this range, or the workflow identity/counter is changed or reset, stop and review a larger `BUILD_NUMBER_BASE` migration against all prior Play codes before resuming; do not reset or lower the base casually.
+
+The signed artifact includes `release.json` schema **2**, recording the effective version, AAB SHA-256, commit, run ID, event, `run_number`, `run_attempt` and `build_number_base`. Promotion validates those fields against the successful source run and downloaded AAB. Retained legacy manifests without a schema remain supported only for successful manual source runs, with their existing provenance/hash checks and the same exact-current-internal requirement.
 
 ## Owner setup (securely, outside this repository and chat)
 
@@ -61,7 +71,9 @@ Prefer separate existing service accounts for internal and production:
 - Internal: access only to this app, with view app information and release-to-testing permissions; **no production-release permission**
 - Production: access only to this app, with view app information and production-release permission; no account-wide administration or financial access
 
-Bind the WIF trust to GitHub's exact numeric repository and owner IDs, `ryanroundhouse/legorganizer`, `refs/heads/main`, and the appropriate environment subject (`repo:ryanroundhouse/legorganizer:environment:google-play-internal` or `google-play-production`). Also restrict the workflow claim to `.github/workflows/google-play-release.yml` on `main` for internal, and `.github/workflows/google-play-promote.yml` on `main` for production. Use only the minimum service-account impersonation role required by the official guide. An unrestricted repository/branch trust would let modified workflows request credentials outside the intended release path.
+Bind WIF trust to repository ID `1172146395`, owner ID `25873667`, repository `ryanroundhouse/legorganizer`, ref `refs/heads/main`, and the exact environment and workflow. Internal uses `google-play-internal` and `.github/workflows/google-play-release.yml`; production uses `google-play-production` and `.github/workflows/google-play-promote.yml`, both on `main`. Allow `push` or `workflow_dispatch` only for internal; production stays `workflow_dispatch` only.
+
+The existing mapping is `google.subject = assertion.repository_id + ':' + assertion.environment`, so internal's mapped subject is `1172146395:google-play-internal` (production's is `1172146395:google-play-production`). Preserve the exact subject-based service-account binding. GitHub's default `repo:…:environment:…` OIDC `sub` is **not** this deployment's mapped Google subject. Use only the minimum impersonation role required by the official guide; an unrestricted repository/branch binding would trust unintended workflows.
 
 For **each environment**, add these non-secret environment variables after its trust/permissions are configured:
 
@@ -72,25 +84,56 @@ For **each environment**, add these non-secret environment variables after its t
 
 The job obtains a short-lived access token with only the `androidpublisher` OAuth scope immediately before its Play calls. No service-account JSON key or permanent token is stored in GitHub, and no credential file is created. WIF still grants persistent trust; review and maintain it as security configuration.
 
+### 5. One-time owner migration for automatic internal releases
+
+The owner must explicitly make this security change outside the repository. These are instructions, not a change performed by this PR. Update **only** provider `github` in pool `legorganizer-internal`, project `moodful`. Leave the production provider, service-account IAM bindings, roles, issuer, audiences and attribute mappings unchanged.
+
+First inspect the full current provider:
+
+```sh
+gcloud iam workload-identity-pools providers describe github \
+  --project=moodful \
+  --location=global \
+  --workload-identity-pool=legorganizer-internal \
+  --format=json
+```
+
+Confirm its condition already requires all six exact repository ID, owner ID, repository, ref, environment and workflow values below, with `assertion.event_name == 'workflow_dispatch'`. Confirm the subject mapping above, existing issuer/audiences, and the existing internal service account's exact subject binding. Record the current configuration for comparison. **If anything differs or there are additional restrictions, stop and review; do not overwrite or remove them with this example.**
+
+Replace only the event predicate with `(assertion.event_name == 'push' || assertion.event_name == 'workflow_dispatch')`. This command supplies the complete condition while omitting all other update flags so their values are retained:
+
+```sh
+gcloud iam workload-identity-pools providers update-oidc github \
+  --project=moodful \
+  --location=global \
+  --workload-identity-pool=legorganizer-internal \
+  --attribute-condition="assertion.repository_id == '1172146395' && assertion.repository_owner_id == '25873667' && assertion.repository == 'ryanroundhouse/legorganizer' && assertion.ref == 'refs/heads/main' && assertion.environment == 'google-play-internal' && assertion.workflow_ref == 'ryanroundhouse/legorganizer/.github/workflows/google-play-release.yml@refs/heads/main' && (assertion.event_name == 'push' || assertion.event_name == 'workflow_dispatch')"
+```
+
+Read the provider again with the same `describe` command and compare before/after: only the event predicate should differ; verify the exact subject binding is unchanged too. Review the [official `update-oidc` reference](https://docs.cloud.google.com/sdk/gcloud/reference/iam/workload-identity-pools/providers/update-oidc). Clear/coordinate pending Console changes before merging the automation; if the old manual-only trust remains, push-triggered authentication fails safely rather than widening trust itself.
+
 ## Release procedure
 
-1. Make and review the actual app changes separately. Choose a new version/build number in `pubspec.yaml`, commit it, and merge reviewed code. Its Android version code must exceed all previously used Play version codes. The API preflight checks currently visible bundles/APKs/tracks; Google Play remains the authority for historical reuse
-2. Check the Play Console publishing overview. Finish or remove unrelated pending changes before starting. Do not edit the Console or run another publisher while this workflow is active. A Play edit commit can submit other pending changes, so the owner must ensure the publishing queue contains only the intended release
-3. In GitHub Actions, run **Google Play release**, choose `main`, and type the exact committed version, such as `1.0.20+21`. The example is illustrative; the pipeline does not choose or bump it
+1. Make and review the actual app changes separately. Change the marketing version in `pubspec.yaml` when desired; no per-release build-number edit is needed
+2. **Before pushing or merging to `main`**, check the Play Console publishing overview. Finish or remove unrelated pending changes and coordinate with other publishers. The main push automatically starts the internal release after checks pass
+3. For a manual internal release instead, run **Google Play release** in GitHub Actions, choose `main`, and enter only the exact marketing version in `expected_version_name`, such as `1.0.20`. It receives a new automatic build number just like a push run
 4. Wait for the internal upload and complete run to succeed. Review the summary's source commit, version and AAB hash, download the artifact if needed, and test the app from Google Play's internal track on a real device
-5. When ready, manually run **Promote Google Play release** on `main`. Enter the successful internal workflow run ID (the number at the end of its Actions URL) and the exact tested version. This can happen later; it does not rebuild or upload the bundle. The original signed artifact must still be retained (30 days)
-6. The promotion preflight verifies the source run is successful, manual, from this repository's `main`, and specifically the internal-release workflow. It downloads that run attempt's exact artifact, checks its source SHA, run ID, version, package and AAB checksum, and posts a review summary
+5. When ready, manually run **Promote Google Play release** on `main`. Enter the successful internal workflow run ID (the number at the end of its Actions URL) and the full tested version from its summary, such as `1.0.20+1002`, in `expected_version`. It does not rebuild or upload the bundle. The original signed artifact must still be retained (30 days), and that exact version must still be the completed internal release
+6. The promotion preflight verifies the source run is successful, from a push or manual dispatch on this repository's `main`, and specifically the internal-release workflow. It downloads that run attempt's exact artifact, verifies its manifest, source commit, run identity, version, package and AAB checksum, and posts a review summary
 7. The named reviewer opens **Review deployments** in the promotion run and approves `google-play-production` only after testing. Approval authorizes a **100% production rollout**. Reject/cancel if unsuitable. The production job rechecks the bundle hash/version against Play and refuses an existing draft, halted or staged production release rather than replacing it
 8. Check Play Console for review, managed publishing and actual user availability. A successful track commit is not proof that Play review has finished or every user can download it
 
-A single release concurrency group prevents overlapping runs from this workflow. GitHub can replace an older pending run with a newer one; do not queue multiple releases while a reviewer is testing. A different publisher or Play Console session is outside that lock.
+Both release workflows share concurrency group `google-play-release`, with `cancel-in-progress: false` and `queue: max`. One runs at a time, including while production waits for review, with up to 100 pending runs. Further arrivals are cancelled when full. Processing follows the order runs start waiting, which need not match push/dispatch or build-number order; stale runs fail the Play preflight. Queue limits, failed checks and platform failures mean successful publication of every push is not guaranteed. A different publisher or Console session is outside this lock. See [GitHub concurrency behavior](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency).
+
+**A newer internal upload blocks promotion of an older candidate.** Promotion still requires the exact tested version to be the completed current internal release and its Play bundle hash to match. Coordinate main pushes while testing and dispatching promotion; once promotion owns the shared lock, later workflow releases queue behind it. Do not weaken this guard, keep multiple internal candidates, or promote an old artifact just because it was once tested.
 
 ## Failure and recovery
 
 - **Missing signing/configuration:** complete environment setup; no upload occurs before the build and safety checks pass
-- **Version reuse:** do not blindly rerun an upload. Check Play Console. If the version was already committed internally and the run succeeded, test that version and use **Promote Google Play release** with its run ID. If the source run failed after an ambiguous commit, verify the version manually in Play Console and handle its promotion there after review. Use a newly reviewed version for a genuinely new upload
+- **Version reuse, stale or out-of-order run:** do not blindly rerun an upload; reruns keep the same code. Check Play Console. If that exact version is still current internally and the source run succeeded, test it and promote by its run ID. If the source run failed after an ambiguous commit, verify it in Console and handle promotion there after review. For a new upload, use a new main/manual run; if another publisher has overtaken the allocation range, review a larger-base migration first. Never retry with `max + 1`
+- **Newer internal candidate:** test and promote the newer current candidate, or resolve the intended release deliberately in Play Console after review. The workflow does not promote a superseded internal version
 - **Ambiguous timeout after upload/commit:** inspect Play Console before retrying; writes are deliberately not automatically retried. The AAB/version/hash manifest is kept as evidence
-- **Production rejected, timed out, or rerun:** the tested internal version remains available. Promotion reruns are disabled because approval history is run-level. Start a **new promotion dispatch with the same successful internal run and version** for a fresh approval, without a new upload. An expired artifact needs a separately reviewed manual Play Console promotion
+- **Production rejected, timed out, or rerun:** no production rollout is authorized by a failed gate. Promotion reruns are disabled because approval history is run-level. If the tested version is still current internally, start a **new promotion dispatch with the same successful internal run and version** for fresh approval, without a new upload. An expired artifact needs a separately reviewed manual Play Console promotion
 - **Existing review:** both internal and production commits set `changesInReviewBehavior=ERROR_IF_IN_REVIEW` and fail instead of cancelling the review. Wait for it to finish or handle it deliberately in Console; do not remove the guard. This does not detect unrelated changes that have not yet been submitted
 - **Draft app / production access / policy requirements:** resolve the reported requirement in Play Console; the pipeline does not change the release to draft or relax Play requirements silently
 - **No actual approval or unverifiable protections:** fix reviewer/branch settings or API visibility; never substitute a Boolean variable for review
