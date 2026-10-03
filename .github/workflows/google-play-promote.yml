@@ -1,17 +1,8 @@
 name: Promote Google Play release
-run-name: Promote Play ${{ inputs.expected_version }} from run ${{ inputs.internal_run_id }}
+run-name: Promote latest successful internal release (100% production)
 
 on:
   workflow_dispatch:
-    inputs:
-      internal_run_id:
-        description: 'Successful Google Play release run ID containing the tested internal AAB'
-        type: string
-        required: true
-      expected_version:
-        description: 'Exact tested version from that run, for example 1.0.20+21 (100% production rollout)'
-        type: string
-        required: true
 
 permissions:
   contents: read
@@ -30,23 +21,24 @@ jobs:
       contents: read
       actions: read
     outputs:
+      version: ${{ steps.candidate.outputs.version }}
+      source_run_id: ${{ steps.source.outputs.run_id }}
       version_code: ${{ steps.candidate.outputs.version_code }}
       sha256: ${{ steps.candidate.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Verify source workflow provenance and production protections
+      - name: Select and pin latest successful internal release
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          INTERNAL_RUN_ID: ${{ inputs.internal_run_id }}
         run: python3 scripts/ci/release_support.py source-run
       - name: Download only the verified source artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ steps.source.outputs.artifact_id }}
-          run-id: ${{ inputs.internal_run_id }}
+          run-id: ${{ steps.source.outputs.run_id }}
           github-token: ${{ github.token }}
           path: release-candidate
           merge-multiple: true
@@ -54,8 +46,8 @@ jobs:
       - name: Verify candidate version, source commit and bundle hash
         id: candidate
         env:
-          INTERNAL_RUN_ID: ${{ inputs.internal_run_id }}
-          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          INTERNAL_RUN_ID: ${{ steps.source.outputs.run_id }}
+          SOURCE_ARTIFACT_ID: ${{ steps.source.outputs.artifact_id }}
           SOURCE_COMMIT: ${{ steps.source.outputs.source_commit }}
           SOURCE_EVENT: ${{ steps.source.outputs.source_event }}
           SOURCE_RUN_NUMBER: ${{ steps.source.outputs.source_run_number }}
@@ -63,7 +55,7 @@ jobs:
         run: python3 scripts/ci/release_support.py verify-artifact
 
   production:
-    name: Approve exact tested bundle for 100% production
+    name: Approve ${{ needs.preflight.outputs.version }} from run ${{ needs.preflight.outputs.source_run_id }} for 100% production
     needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 10

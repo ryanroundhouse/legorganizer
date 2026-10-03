@@ -19,6 +19,7 @@ MAX_VERSION_CODE = 2100000000
 # Never lower this or reset/replace the release workflow without a reviewed migration.
 BUILD_NUMBER_BASE = 1000
 RELEASE_EVENTS = ("push", "workflow_dispatch")
+RELEASE_WORKFLOW = ".github/workflows/google-play-release.yml"
 
 
 def require(condition, message):
@@ -46,6 +47,32 @@ def request_json(url, token, method="GET", payload=None, media=None):
 
 def github(path):
     return request_json(f"https://api.github.com/repos/{REPOSITORY}/{path}", os.environ["GH_TOKEN"])
+
+
+def github_collection(path, key):
+    """Read a complete, stable collection; never select from a truncated page."""
+    items, seen = [], set()
+    expected_total = None
+    page = 1
+    while True:
+        data = github(f"{path}?per_page=100&page={page}")
+        require(isinstance(data, dict), "Malformed GitHub collection")
+        total, batch = data.get("total_count"), data.get(key)
+        require(type(total) is int and total >= 0 and isinstance(batch, list) and len(batch) <= 100,
+                "Malformed GitHub collection")
+        if expected_total is None:
+            expected_total = total
+        require(total == expected_total, "GitHub history changed during selection; start a new promotion")
+        for item in batch:
+            require(isinstance(item, dict) and type(item.get("id")) is int and item["id"] > 0
+                    and item["id"] not in seen, "Duplicate or invalid GitHub collection item")
+            seen.add(item["id"])
+            items.append(item)
+        require(len(items) <= expected_total, "Inconsistent GitHub collection count")
+        if len(items) == expected_total:
+            return items
+        require(batch, "Incomplete GitHub history; refusing partial candidate selection")
+        page += 1
 
 
 def validate_environment(environment, policies):
@@ -115,32 +142,61 @@ def preflight():
     print(f"Release candidate: {name}+{code} (build base {BUILD_NUMBER_BASE} + workflow run {os.environ['GITHUB_RUN_NUMBER']})")
 
 
+def eligible_source_run(run):
+    return (isinstance(run, dict) and isinstance(run.get("repository"), dict)
+            and run["repository"].get("full_name") == REPOSITORY
+            and run.get("head_branch") == "main" and run.get("event") in RELEASE_EVENTS
+            and run.get("path") == RELEASE_WORKFLOW
+            and run.get("status") == "completed" and run.get("conclusion") == "success")
+
+
+def source_identity(run):
+    require(eligible_source_run(run),
+            "Source must be a successful push/manual Google Play release run on this repository's main branch")
+    require(type(run.get("id")) is int and run["id"] > 0, "Invalid source run ID")
+    require(isinstance(run.get("head_sha"), str) and re.fullmatch(r"[0-9a-f]{40}", run["head_sha"]), "Invalid source commit")
+    require(type(run.get("run_number")) is int and run["run_number"] > 0
+            and type(run.get("run_attempt")) is int and run["run_attempt"] > 0, "Invalid source run counters")
+    return (run["id"], run["run_number"], run["run_attempt"], run["head_sha"], run["event"])
+
+
+def latest_source_run(runs):
+    candidates = [run for run in runs if eligible_source_run(run)]
+    require(candidates, "No successful main internal release is available")
+    for run in candidates:
+        source_identity(run)
+    newest = max(run["run_number"] for run in candidates)
+    matches = [run for run in candidates if run["run_number"] == newest]
+    require(len(matches) == 1, "Ambiguous latest internal workflow run")
+    return matches[0]
+
+
 def source_run():
     require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORY, "Wrong repository")
     require(os.environ.get("GITHUB_REF") == "refs/heads/main", "Promote only from main")
     require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "Manual dispatch required")
+    require(os.environ.get("GITHUB_RUN_ATTEMPT") == "1", "Production reruns are disabled; start a new promotion")
     check_gate()
-    run_id = os.environ["INTERNAL_RUN_ID"]
-    require(re.fullmatch(r"[1-9]\d*", run_id), "Invalid internal workflow run ID")
-    run = github(f"actions/runs/{run_id}")
-    require(run.get("repository", {}).get("full_name") == REPOSITORY
-            and run.get("head_branch") == "main" and run.get("event") in RELEASE_EVENTS
-            and run.get("path") == ".github/workflows/google-play-release.yml"
-            and run.get("status") == "completed" and run.get("conclusion") == "success",
-            "Source must be a successful push/manual Google Play release run on this repository's main branch")
+    # No server-side filters: GitHub caps filtered run searches at 1,000 results.
+    runs = github_collection("actions/workflows/google-play-release.yml/runs", "workflow_runs")
+    run = latest_source_run(runs)
+    identity = source_identity(run)
+    run_id = str(run["id"])
+    require(source_identity(github(f"actions/runs/{run_id}")) == identity,
+            "Selected source changed during selection; start a new promotion")
     name = f"play-aab-{run_id}-{run['run_attempt']}"
-    artifacts = github(f"actions/runs/{run_id}/artifacts?per_page=100").get("artifacts", [])
-    matches = [artifact for artifact in artifacts if artifact.get("name") == name and not artifact.get("expired")]
-    require(len(matches) == 1, "Exactly one unexpired signed release artifact is required")
-    require(re.fullmatch(r"[0-9a-f]{40}", run["head_sha"]), "Invalid source commit")
-    require(type(run.get("run_number")) is int and run["run_number"] > 0
-            and type(run.get("run_attempt")) is int and run["run_attempt"] > 0, "Invalid source run counters")
-    output({"artifact_id": matches[0]["id"], "source_commit": run["head_sha"],
+    artifacts = github_collection(f"actions/runs/{run_id}/artifacts", "artifacts")
+    matches = [artifact for artifact in artifacts if artifact.get("name") == name and artifact.get("expired") is False]
+    require(len(matches) == 1, "Latest successful release needs exactly one unexpired signed artifact; no older fallback")
+    require(source_identity(github(f"actions/runs/{run_id}")) == identity,
+            "Selected source changed during artifact resolution; start a new promotion")
+    output({"run_id": run_id, "artifact_id": matches[0]["id"], "source_commit": run["head_sha"],
             "source_event": run["event"], "source_run_number": run["run_number"],
             "source_run_attempt": run["run_attempt"]})
+    print(f"Pinned internal run {run_id}, attempt {run['run_attempt']}, artifact {matches[0]['id']}")
 
 
-def validate_manifest(candidate, data, expected_version, source_commit, run_id,
+def validate_manifest(candidate, data, source_commit, run_id,
                       source_event, source_run_number, source_run_attempt):
     require(source_event in RELEASE_EVENTS and type(source_run_number) is int and source_run_number > 0
             and type(source_run_attempt) is int and source_run_attempt > 0, "Invalid source run metadata")
@@ -148,7 +204,6 @@ def validate_manifest(candidate, data, expected_version, source_commit, run_id,
     code = candidate.get("version_code")
     require(type(code) is int and 0 < code <= MAX_VERSION_CODE, "Invalid artifact version code")
     require(re.fullmatch(r"\d+\.\d+\.\d+", candidate.get("version_name", "")), "Invalid artifact version name")
-    require(expected_version == f"{candidate['version_name']}+{code}", "Version confirmation differs from source artifact")
     require(candidate.get("commit") == source_commit and candidate.get("run_id") == run_id,
             "Artifact provenance differs from the verified source run")
     if type(candidate.get("schema_version")) is int and candidate["schema_version"] == 2:
@@ -165,23 +220,26 @@ def validate_manifest(candidate, data, expected_version, source_commit, run_id,
         require("schema_version" not in candidate and source_event == "workflow_dispatch",
                 "Automatic sources require a versioned release manifest")
     require(candidate.get("sha256") == hashlib.sha256(data).hexdigest(), "Downloaded AAB checksum mismatch")
-    return {"version_code": code, "sha256": candidate["sha256"]}
+    return {"version": f"{candidate['version_name']}+{code}", "version_code": code, "sha256": candidate["sha256"]}
 
 
 def verify_artifact():
     folder = Path("release-candidate")
     candidate = json.loads((folder / "release.json").read_text())
     values = validate_manifest(candidate, (folder / "app-release.aab").read_bytes(),
-                               os.environ["EXPECTED_VERSION"], os.environ["SOURCE_COMMIT"], os.environ["INTERNAL_RUN_ID"],
+                               os.environ["SOURCE_COMMIT"], os.environ["INTERNAL_RUN_ID"],
                                os.environ["SOURCE_EVENT"], int(os.environ["SOURCE_RUN_NUMBER"]),
                                int(os.environ["SOURCE_RUN_ATTEMPT"]))
     output(values)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
         summary.write(f"## Approval requested: 100% production rollout\n"
                       f"- Source run: https://github.com/{REPOSITORY}/actions/runs/{candidate['run_id']}\n"
+                      f"- Source attempt: `{os.environ['SOURCE_RUN_ATTEMPT']}`; artifact ID: `{os.environ['SOURCE_ARTIFACT_ID']}`\n"
                       f"- Version: `{candidate['version_name']}+{candidate['version_code']}`\n"
                       f"- Commit: `{candidate['commit']}`\n- AAB SHA-256: `{candidate['sha256']}`\n"
-                      "Approve only after testing this version from the internal track.\n")
+                      "This candidate is pinned; approval never selects a newer build.\n"
+                      "Confirm the installed build number, not just the marketing version, and test before approving.\n"
+                      "After approval, Play must still report this exact current internal version and bundle hash.\n")
 
 
 class Play:
@@ -240,11 +298,10 @@ def upload_internal(play, code, digest):
 
 
 def validate_internal(track, bundles, code, digest):
-    releases = [release for release in track.get("releases", [])
-                if release.get("status") == "completed"
-                and release.get("versionCodes") == [str(code)]]
-    require(track.get("track") == "internal" and len(releases) == 1,
-            "Expected exact version is not a completed internal-testing release")
+    releases = track.get("releases", [])
+    require(track.get("track") == "internal" and len(releases) == 1
+            and releases[0].get("status") == "completed" and releases[0].get("versionCodes") == [str(code)],
+            "Expected exact version is not the sole completed internal-testing release")
     matches = [bundle for bundle in bundles if int(bundle["versionCode"]) == code]
     require(len(matches) == 1 and matches[0].get("sha256", "").lower() == digest,
             "Google Play bundle SHA-256 does not match this run's signed AAB")

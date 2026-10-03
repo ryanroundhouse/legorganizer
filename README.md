@@ -69,7 +69,11 @@ Output locations:
 
 Release signing is configured in `android/app/build.gradle` and requires the existing upload keystore plus an ignored `android/key.properties` file. Release builds do not fall back to a debug key. Never commit signing credentials.
 
-Every push or merge to `main` runs checks and, once signing and Google trust are configured, publishes a signed AAB to Google Play internal testing with an automatic build number. Manual internal releases remain available; production still requires a separate manual dispatch and reviewer approval. See [Google Play release pipeline](docs/google-play-release.md) for setup, the one-time trust migration, and release safety checks. Merging the automation can publish that merge commit immediately, so keep unrelated pending Play Console changes clear before enabling it.
+Every push or merge to `main` runs checks and, once signing and Google trust are configured, publishes a signed AAB to Google Play internal testing with an automatic build number. Manual internal releases remain available.
+
+To release to production, run **Promote Google Play release** on `main` with no inputs, review the specific build selected from the latest successful internal-release run, then approve the **100% production rollout** only after confirming that exact build was installed and tested. The workflow verifies that it is still the sole completed internal release after approval and stops if it changed. See [Google Play release pipeline](docs/google-play-release.md) for setup and release safety checks.
+
+Any merge to `main`, including a pipeline update, can immediately publish a new internal build, so keep unrelated pending Play Console changes clear.
 
 ## How to use
 
