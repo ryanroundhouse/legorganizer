@@ -49,3 +49,6 @@ app.*.map.json
 /android/key.properties
 *.jks
 *.keystore
+
+# Temporary credentials produced by Google auth tooling
+gha-creds-*.json

@@ -20,7 +20,7 @@ It includes:
 
 ## Prerequisites
 
-- Flutter SDK (Dart 3.6+ compatible)
+- Flutter SDK 3.41.9 (Dart 3.11.5; matches the checked-in dependency lockfile)
 - A target device/emulator, or Chrome for web
 
 ## Setup
@@ -67,7 +67,9 @@ Output locations:
 - APK: `build/app/outputs/flutter-apk/app-release.apk`
 - AAB: `build/app/outputs/bundle/release/app-release.aab`
 
-Note: release signing is not configured yet. By default, Flutter signs release builds with debug keys until you add a keystore/signing config in `android/app/build.gradle`.
+Release signing is configured in `android/app/build.gradle` and requires the existing upload keystore plus an ignored `android/key.properties` file. Release builds do not fall back to a debug key. Never commit signing credentials.
+
+For CI, manual internal testing releases, secure credential setup, and reviewer-approved production promotion, see [Google Play release pipeline](docs/google-play-release.md). The workflow does not automatically bump the version or publish on push.
 
 ## How to use
 
