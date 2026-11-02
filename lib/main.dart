@@ -29,6 +29,7 @@ class LegoBinApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       title: 'Legorganizer',
       theme: buildLightTheme(),
       themeMode: ThemeMode.light,
