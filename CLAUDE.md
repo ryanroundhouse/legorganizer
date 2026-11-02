@@ -40,3 +40,35 @@ Procedure for a new release:
 
 Local release signing (`android/key.properties`, `~/app-signing-key.jks`) is
 only for local/manual testing builds.
+
+## iOS / App Store releases
+
+App Store Connect app: "Legorganizer", Apple ID 6829595324, bundle ID
+`com.gencorp.legorganizer`, team CC36J3BH7X (Roundhouse Labs Inc.).
+iPhone-only, iOS 15+. There is no CI for iOS; releases are built locally.
+
+- Marketing version comes from `pubspec.yaml` and is shared with Android.
+  iOS build numbers are independent of Android's and must increase per
+  upload: pass `--build-number N` explicitly.
+- Donation links and the donation prompt are hidden on iOS
+  (`_donationsEnabled` in `lib/main.dart`). Do not add external payment
+  links on iOS; App Review rejects them.
+- `ios/Podfile` forces every pod to `IPHONEOS_DEPLOYMENT_TARGET = 15.0`;
+  Xcode 27 refuses the old targets some pods declare.
+- Simulator builds must be debug (`flutter run -d <sim> --debug`); release
+  mode is not supported on simulators.
+
+Procedure for a new release:
+
+1. `flutter build ipa --release --build-number <next>` (automatic signing;
+   the Apple Distribution certificate is managed by Xcode).
+2. Upload the archive with
+   `xcodebuild -exportArchive -archivePath build/ios/archive/Runner.xcarchive
+   -exportOptionsPlist <plist with method app-store-connect, destination upload>
+   -exportPath <dir> -allowProvisioningUpdates`.
+3. In App Store Connect, create the new version, attach the build, update
+   What's New, and submit for review. Release is manual: the user presses
+   Release after approval.
+4. Privacy policy and support page are served from `docs/` via GitHub Pages
+   (https://ryanroundhouse.github.io/legorganizer/). Update `docs/privacy.md`
+   and `PRIVACY_POLICY.md` together if data practices change.
