@@ -378,6 +378,10 @@ class BrickognizeClient {
 class _PieceGridScreenState extends State<PieceGridScreen> {
   static const _donationUrl =
       'https://donate.stripe.com/7sYaEYd18b2V7iz0tkdnW00';
+  // Apple's App Store guidelines do not allow external donation links, so
+  // donation UI is hidden on iOS.
+  static bool get _donationsEnabled =>
+      defaultTargetPlatform != TargetPlatform.iOS;
   String _searchQuery = '';
   String? _selectedPartCatId;
   String? _selectedBox;
@@ -762,17 +766,19 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
                 url: 'https://brickognize.com/',
                 onOpen: _openAboutLink,
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'If Legorganizer has been helpful, donations are welcome but '
-                'completely optional. I am an independent developer building '
-                'this for fun, and support helps cover server hosting costs.',
-              ),
-              _AboutLink(
-                label: 'Support Legorganizer with a donation',
-                url: _donationUrl,
-                onOpen: _openAboutLink,
-              ),
+              if (_donationsEnabled) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'If Legorganizer has been helpful, donations are welcome but '
+                  'completely optional. I am an independent developer building '
+                  'this for fun, and support helps cover server hosting costs.',
+                ),
+                _AboutLink(
+                  label: 'Support Legorganizer with a donation',
+                  url: _donationUrl,
+                  onOpen: _openAboutLink,
+                ),
+              ],
             ],
           ),
           actions: [
@@ -787,6 +793,9 @@ class _PieceGridScreenState extends State<PieceGridScreen> {
   }
 
   Future<void> _maybeShowDonationPrompt() async {
+    if (!_donationsEnabled) {
+      return;
+    }
     final shouldShow = await _donationPromptController.shouldShowPrompt();
     if (!shouldShow || !mounted) {
       return;
